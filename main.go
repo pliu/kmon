@@ -15,7 +15,6 @@ import (
 
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/kmon"
-	"github.com/pliu/kmon/pkg/metrics"
 )
 
 var (
@@ -26,8 +25,6 @@ var (
 
 func main() {
 	flag.Parse()
-
-	metrics.Init()
 
 	log.DefaultLogger = log.Logger{
 		Caller:     1,
@@ -51,11 +48,11 @@ func main() {
 		cancel()
 	}()
 
-	km, err := kmon.NewKMon(&config.KMonConfig{})
+	m, err := kmon.NewMonitorFromConfig(&config.KMonConfig{})
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to create kmon instance")
+		log.Fatal().Err(err).Msg("failed to create monitor instance")
 	}
-	km.Start(ctx)
+	m.Start(ctx)
 
 	// Setup Prometheus metrics server
 	addr := fmt.Sprintf(":%d", *metricsPort)

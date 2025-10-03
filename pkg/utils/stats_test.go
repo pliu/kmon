@@ -157,7 +157,9 @@ func TestStatsMerge(t *testing.T) {
 
 	left.Merge(right)
 	require.Equal(t, 7, left.Len())
+	require.Equal(t, []int64{10, 20, 25, 30, 35, 40, 45}, left.Values())
 	require.Equal(t, 3, right.Len())
+	require.Equal(t, []int64{30, 35, 40}, right.Values())
 
 	avg, ok := left.Average()
 	require.True(t, ok)
@@ -172,7 +174,9 @@ func TestStatsMerge(t *testing.T) {
 	left.Add(50)
 	right.Add(10)
 	require.Equal(t, 4, left.Len())
+	require.Equal(t, []int64{25, 35, 45, 50}, left.Values())
 	require.Equal(t, 2, right.Len())
+	require.Equal(t, []int64{10, 35}, right.Values())
 
 	avg, ok = left.Average()
 	require.True(t, ok)

@@ -2,12 +2,14 @@
 
 A Kafka monitoring tool written in Go to provide insights into Kafka cluster performance and behavior.
 
-## Features
+## TODO
 
-- **Sliding-window stats** powered by the `Stats` structure, giving efficient rolling averages and percentiles for any metric stream (latencies, sizes, etc.). `Stats.Merge` lets you compose results from multiple producers or consumers while keeping data windowed correctly.
-- **Order-statistic tree** (`SortedList`) to support fast `O(log n)` inserts and percentile lookups, even with large duplicate sets.
-- **Kafka read/write exercises** via the Franz-go client to validate throughput and round-trip timings across multiple topics.
-- **Clean separation** between reusable utility packages (`pkg/utils`) and Kafka-specific orchestration (`pkg/clients`, `pkg/kmon`).
+- Add logging
+
+## Properties
+
+- **Static Partitions:** Each `Monitor` instance assumes that the set of partitions it finds for a topic at startup is static and will not change throughout its lifetime. The monitor does not currently handle dynamic partition changes.
+- **Message Self-Processing:** Each `Monitor` instance only processes messages that it has created. This is verified by checking the UUID in the message key, which is unique to each `Monitor` instance.
 
 ## Getting Started
 

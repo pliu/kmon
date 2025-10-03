@@ -30,6 +30,27 @@ func (sl *SortedList) Len() int {
 	return sl.len
 }
 
+// Keys returns all keys in ascending order, including duplicates.
+func (sl *SortedList) Keys() []int64 {
+	if sl.len == 0 {
+		return []int64{}
+	}
+	result := make([]int64, 0, sl.len)
+	sl.appendKeys(sl.root, &result)
+	return result
+}
+
+func (sl *SortedList) appendKeys(node *sortedListNode, out *[]int64) {
+	if node == nil {
+		return
+	}
+	sl.appendKeys(node.left, out)
+	for i := 0; i < node.count; i++ {
+		*out = append(*out, node.key)
+	}
+	sl.appendKeys(node.right, out)
+}
+
 // Merge inserts all keys from other into this sorted list.
 func (sl *SortedList) Merge(other *SortedList) {
 	if other == nil || other.root == nil {

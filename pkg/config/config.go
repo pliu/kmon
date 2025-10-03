@@ -1,8 +1,11 @@
 package config
 
 type KMonConfig struct {
-	KafkaConfig       KafkaConfig
-	SampleFrequencyMs int
+	ProducerKafkaConfig     *KafkaConfig
+	ConsumerKafkaConfig     *KafkaConfig
+	ProducerMonitoringTopic string
+	ConsumerMonitoringTopic string
+	SampleFrequencyMs       int
 }
 
 type KafkaConfig struct {

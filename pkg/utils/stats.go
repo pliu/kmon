@@ -100,6 +100,17 @@ func (s *Stats) Len() int {
 	return s.values.Len()
 }
 
+// Values returns the current window's values in ascending order, including duplicates.
+func (s *Stats) Values() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.values == nil || s.values.Len() == 0 {
+		return []int64{}
+	}
+	return s.values.Keys()
+}
+
 // Merge merges all observations from other into this tracker.
 func (s *Stats) Merge(other *Stats) {
 	if other == nil {

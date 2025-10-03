@@ -111,3 +111,15 @@ func TestSortedListMerge(t *testing.T) {
 
 	require.Equal(t, 3, right.Len())
 }
+
+func TestSortedListKeys(t *testing.T) {
+	sl := NewSortedList()
+	require.Empty(t, sl.Keys())
+
+	values := []int64{10, 5, 10, 7, 7, 20}
+	for _, v := range values {
+		sl.Insert(v)
+	}
+
+	require.Equal(t, []int64{5, 7, 7, 10, 10, 20}, sl.Keys())
+}

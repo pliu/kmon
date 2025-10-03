@@ -34,10 +34,8 @@ func TestKafka_WriteAndConsume_SingleTopic_Serial(t *testing.T) {
 
 func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 	// Create a mock config for testing
-	mockConfig := &config.KMonConfig{
-		KafkaConfig: config.KafkaConfig{
-			SeedBrokers: []string{kafkaBroker},
-		},
+	mockConfig := &config.KafkaConfig{
+		SeedBrokers: []string{kafkaBroker},
 	}
 
 	// 1. Create a new admin client
