@@ -1,29 +1,28 @@
+//go:build kafka
+// +build kafka
+
 package clients
 
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/pliu/kmon/pkg/config"
+	"github.com/pliu/kmon/pkg/utils"
 )
 
 const (
 	kafkaBroker       = "localhost:9092"
 	numWarmupMessages = 10
 )
-
-type latencyData struct {
-	mu        sync.Mutex
-	latencies []float64
-}
 
 func TestKafka_WriteAndConsume_MultipleTopics(t *testing.T) {
 	runWriteAndConsumeTest(t, 5, 200)
@@ -88,11 +87,10 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 	t.Log("Warm-up complete.")
 
 	// 4. Write messages
-	latencyMap := make(map[string]*latencyData)
+	latencyMap := make(map[string]*utils.Stats)
+	mockClock := clock.NewMock()
 	for _, topic := range topicNames {
-		latencyMap[topic] = &latencyData{
-			latencies: make([]float64, 0, numMessages),
-		}
+		latencyMap[topic] = utils.NewStatsWithClock(1*time.Second, mockClock)
 	}
 
 	var wg sync.WaitGroup
@@ -111,12 +109,9 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 						t.Errorf("failed to produce message: %v", err)
 					}
 
-					topicLatencies := latencyMap[r.Topic]
-					latency := float64(time.Since(start).Microseconds())
-
-					topicLatencies.mu.Lock()
-					topicLatencies.latencies = append(topicLatencies.latencies, latency)
-					topicLatencies.mu.Unlock()
+					topicStats := latencyMap[r.Topic]
+					latencyMicros := time.Since(start).Microseconds()
+					topicStats.Add(latencyMicros)
 				})
 			}
 		}(topicNames[i])
@@ -124,22 +119,24 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 	wg.Wait()
 
 	// 5. Calculate latency stats
-	var allLatencies []float64
-	for _, data := range latencyMap {
-		allLatencies = append(allLatencies, data.latencies...)
+	overallStats := utils.NewStatsWithClock(1*time.Second, mockClock)
+	for _, topicStats := range latencyMap {
+		overallStats.Merge(topicStats)
 	}
-	var sum float64
-	for _, l := range allLatencies {
-		sum += l
+
+	assert.Equal(t, numTopics*numMessages, overallStats.Len())
+	avgLatency, ok := overallStats.Average()
+	if !ok {
+		t.Fatalf("failed to calculate average latency")
 	}
-	sort.Float64s(allLatencies)
-	avgLatency := sum / float64(len(allLatencies))
-	p99Latency, _ := percentile(allLatencies, 99)
-	p50Latency, _ := percentile(allLatencies, 50)
+	percentiles, ok := overallStats.Percentile([]float64{50, 99})
+	if !ok || len(percentiles) < 2 {
+		t.Fatalf("failed to calculate percentile latencies")
+	}
 
 	t.Logf("Average latency: %.2fµs", avgLatency)
-	t.Logf("Median latency: %.2fµs", p50Latency)
-	t.Logf("p99 latency: %.2fµs", p99Latency)
+	t.Logf("Median latency: %dµs", percentiles[0])
+	t.Logf("p99 latency: %dµs", percentiles[1])
 
 	// 5. Consume messages
 	cl.AddConsumeTopics(topicNames...)
@@ -156,13 +153,4 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 		consumedMessages += fetches.NumRecords()
 	}
 	assert.Equal(t, numTopics*(numMessages+numWarmupMessages), consumedMessages)
-}
-
-func percentile(data []float64, p float64) (float64, bool) {
-	if len(data) == 0 || p < 0 || p > 100 {
-		return 0, false
-	}
-	sort.Float64s(data)
-	index := int(float64(len(data)-1) * (p / 100.0))
-	return data[index], true
 }

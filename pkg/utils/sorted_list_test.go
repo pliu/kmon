@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"math/rand"
 	"sort"
 	"testing"
@@ -10,134 +9,105 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSortedList_Delete(t *testing.T) {
+func TestSortedListInsertAndGetByIndex(t *testing.T) {
 	sl := NewSortedList()
-	sl.Insert(10, "a")
-	sl.Insert(20, "b")
-	sl.Insert(5, "c")
-	sl.Insert(10, "d") // duplicate
+	sl.Insert(10)
+	sl.Insert(20)
+	sl.Insert(5)
+	sl.Insert(10) // duplicate
+	sl.Insert(15)
 
-	require.Equal(t, 4, sl.Len())
-	vals := sl.GetAll(10)
-	require.Len(t, vals, 2)
+	require.Equal(t, 5, sl.Len())
 
-	// Delete one of the duplicates
-	sl.Delete(10)
-	require.Equal(t, 3, sl.Len())
-	vals = sl.GetAll(10)
-	require.Len(t, vals, 1)
-
-	// Delete the other duplicate
-	sl.Delete(10)
-	require.Equal(t, 2, sl.Len())
-	vals = sl.GetAll(10)
-	require.Len(t, vals, 0)
-
-	// Check remaining elements
-	item, ok := sl.GetByIndex(0)
-	require.True(t, ok)
-	require.Equal(t, int64(5), item.Key)
-
-	item, ok = sl.GetByIndex(1)
-	require.True(t, ok)
-	require.Equal(t, int64(20), item.Key)
-}
-
-func TestSortedList_Duplicates(t *testing.T) {
-	sl := NewSortedList()
-	sl.Insert(10, "a")
-	sl.Insert(20, "b")
-	sl.Insert(10, "c")
-
-	require.Equal(t, 3, sl.Len())
-
-	vals := sl.GetAll(10)
-	require.Len(t, vals, 2)
-	// Order of duplicates is not guaranteed, so we check for presence.
-	require.Contains(t, vals, "a")
-	require.Contains(t, vals, "c")
-
-	sl.Delete(10)
-	require.Equal(t, 2, sl.Len())
-	vals = sl.GetAll(10)
-	require.Len(t, vals, 1)
-}
-
-func TestSortedList_GetByIndex(t *testing.T) {
-	sl := NewSortedList()
-	sl.Insert(10, "a")
-	sl.Insert(20, "b")
-	sl.Insert(5, "c")
-	sl.Insert(15, "d")
-	sl.Insert(10, "e") // duplicate
-
-	// Expected order: 5, 10, 10, 15, 20
-	expectedKeys := []int64{5, 10, 10, 15, 20}
-	for i, key := range expectedKeys {
-		item, ok := sl.GetByIndex(i)
+	expected := []int64{5, 10, 10, 15, 20}
+	for i, key := range expected {
+		value, ok := sl.GetByIndex(i)
 		require.True(t, ok)
-		require.Equal(t, key, item.Key)
+		require.Equal(t, key, value)
 	}
 
-	_, ok := sl.GetByIndex(len(expectedKeys))
+	_, ok := sl.GetByIndex(len(expected))
 	require.False(t, ok)
 }
 
-func TestSortedList_IndexOf(t *testing.T) {
+func TestSortedListDelete(t *testing.T) {
 	sl := NewSortedList()
-	sl.Insert(10, "a")
-	sl.Insert(20, "b")
-	sl.Insert(5, "c")
-	sl.Insert(10, "d") // Duplicate
+	sl.Insert(10)
+	sl.Insert(10)
+	sl.Insert(5)
+	sl.Insert(20)
 
-	idx, ok := sl.IndexOf(5)
+	sl.Delete(10)
+	require.Equal(t, 3, sl.Len())
+
+	value, ok := sl.GetByIndex(0)
 	require.True(t, ok)
-	require.Equal(t, 0, idx)
+	require.Equal(t, int64(5), value)
 
-	idx, ok = sl.IndexOf(10)
+	value, ok = sl.GetByIndex(1)
 	require.True(t, ok)
-	require.Equal(t, 1, idx) // Should be the index of the first occurrence
+	require.Equal(t, int64(10), value)
 
-	idx, ok = sl.IndexOf(20)
+	sl.Delete(10)
+	require.Equal(t, 2, sl.Len())
+	value, ok = sl.GetByIndex(1)
 	require.True(t, ok)
-	require.Equal(t, 3, idx)
+	require.Equal(t, int64(20), value)
 
-	_, ok = sl.IndexOf(100)
-	require.False(t, ok)
+	sl.Delete(42) // no-op
+	require.Equal(t, 2, sl.Len())
 }
 
-func TestSortedList_Randomized(t *testing.T) {
+func TestSortedListRandomized(t *testing.T) {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	sl := NewSortedList()
-	goSlice := make([]int, 0)
+	values := make([]int64, 0, 1000)
 
-	// Insert a large number of random elements
 	for range 1000 {
-		val := r.Intn(100)
-		sl.Insert(int64(val), val)
-		goSlice = append(goSlice, val)
+		v := int64(r.Intn(100))
+		sl.Insert(v)
+		values = append(values, v)
 	}
 
-	// Delete some elements
 	for range 200 {
-		if len(goSlice) > 0 {
-			idx := r.Intn(len(goSlice))
-			val := goSlice[idx]
-			sl.Delete(int64(val))
-			goSlice = append(goSlice[:idx], goSlice[idx+1:]...)
+		if len(values) == 0 {
+			break
 		}
+		idx := r.Intn(len(values))
+		value := values[idx]
+		sl.Delete(value)
+		values = append(values[:idx], values[idx+1:]...)
 	}
 
-	require.Equal(t, len(goSlice), sl.Len())
-
-	// Sort the Go slice to compare against the SortedList
-	sort.Ints(goSlice)
-
-	// Check that the SortedList is still sorted correctly
-	i := 0
-	for item := range sl.Iter() {
-		require.Equal(t, int64(goSlice[i]), item.Key, fmt.Sprintf("Mismatch at index %d", i))
-		i++
+	require.Equal(t, len(values), sl.Len())
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	for i, expected := range values {
+		actual, ok := sl.GetByIndex(i)
+		require.True(t, ok)
+		require.Equal(t, expected, actual)
 	}
-	require.Equal(t, len(goSlice), i) // Ensure we iterated over all elements
+}
+
+func TestSortedListMerge(t *testing.T) {
+	left := NewSortedList()
+	left.Insert(10)
+	left.Insert(5)
+	left.Insert(10)
+
+	right := NewSortedList()
+	right.Insert(7)
+	right.Insert(10)
+	right.Insert(15)
+
+	left.Merge(right)
+	require.Equal(t, 6, left.Len())
+
+	expected := []int64{5, 7, 10, 10, 10, 15}
+	for i, key := range expected {
+		value, ok := left.GetByIndex(i)
+		require.True(t, ok)
+		require.Equal(t, key, value)
+	}
+
+	require.Equal(t, 3, right.Len())
 }
