@@ -1,5 +1,4 @@
-//go:build kafka
-// +build kafka
+//go:build integration
 
 package clients
 
@@ -11,7 +10,7 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
@@ -20,7 +19,7 @@ import (
 )
 
 const (
-	kafkaBroker       = "localhost:9092"
+	kafkaBroker       = "localhost:10000"
 	numWarmupMessages = 10
 )
 
@@ -43,8 +42,8 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 	if err != nil {
 		t.Fatalf("failed to create kafka client: %v", err)
 	}
-	defer cl.Close()
 	adm := kadm.NewClient(cl)
+	defer adm.Close()
 
 	// 2. Create topics
 	topicNames := make([]string, numTopics)
@@ -122,7 +121,7 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 		overallStats.Merge(topicStats)
 	}
 
-	assert.Equal(t, numTopics*numMessages, overallStats.Len())
+	require.Equal(t, numTopics*numMessages, overallStats.Len())
 	avgLatency, ok := overallStats.Average()
 	if !ok {
 		t.Fatalf("failed to calculate average latency")
@@ -146,9 +145,9 @@ func runWriteAndConsumeTest(t *testing.T, numTopics int, numMessages int) {
 		}
 		fetches.EachError(func(topic string, p int32, err error) {
 			t_err := fmt.Errorf("kafka fetch error: topic %s, partition %d: %v", topic, p, err)
-			assert.NoError(t, t_err)
+			require.NoError(t, t_err)
 		})
 		consumedMessages += fetches.NumRecords()
 	}
-	assert.Equal(t, numTopics*(numMessages+numWarmupMessages), consumedMessages)
+	require.Equal(t, numTopics*(numMessages+numWarmupMessages), consumedMessages)
 }

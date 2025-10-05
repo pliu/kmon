@@ -48,7 +48,7 @@ func main() {
 		cancel()
 	}()
 
-	m, err := kmon.NewMonitorFromConfig(&config.KMonConfig{})
+	m, err := kmon.NewMonitorFromConfig(config.KMonConfig{}, []int32{})
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create monitor instance")
 	}

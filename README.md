@@ -5,6 +5,7 @@ A Kafka monitoring tool written in Go to provide insights into Kafka cluster per
 ## TODO
 
 - Add logging
+- Add more error metrics
 
 ## Properties
 
@@ -15,8 +16,8 @@ A Kafka monitoring tool written in Go to provide insights into Kafka cluster per
 
 ### Prerequisites
 
-- Go (version 1.23 or later)
-- A running Kafka cluster
+- go (version 1.23 or later)
+- docker compose
 
 ## Usage
 
@@ -42,12 +43,22 @@ For more detailed logging, you can use the `-debug` flag:
 
 ## Testing
 
-The Kafka client integration test (`pkg/clients/kafka_test.go`) expects a Kafka broker at `localhost:9092`. Start a local cluster (Docker compose, local install, etc.) before running the full suite or disable that package when Kafka is unavailable:
-
 ```sh
 # Unit tests (no Kafka required)
 make unit_tests
 
 # Full suite – requires Kafka
 make all_tests
+```
+
+## Kafka Cluster Management
+
+The project includes commands to start and stop a 3-node Kafka cluster using Docker Compose:
+
+```sh
+# Start a 3-node Kafka cluster
+make start_kafka
+
+# Stop the Kafka cluster
+make stop_kafka
 ```

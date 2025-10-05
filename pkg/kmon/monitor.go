@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"slices"
 	"strconv"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -24,40 +22,33 @@ type partitionMetrics struct {
 }
 
 type Monitor struct {
-	config         *config.KMonConfig
-	producerClient clients.KgoClient
-	consumerClient clients.KgoClient
-	adminClient    clients.KadmClient
-	instanceUUID   string
-	partitions     []int32
-	partitionStats map[int32]*partitionMetrics
+	producerClient  clients.KgoClient
+	producerTopic   string
+	consumerClient  clients.KgoClient
+	instanceUUID    string
+	partitions      []int32
+	partitionStats  map[int32]*partitionMetrics
+	sampleFrequency time.Duration
 }
 
-// TODO: Move defaults into config
-const (
-	statsWindow     = 5 * time.Minute
-	defaultSampleMs = 1000
-	quantileP50     = 50
-	quantileP95     = 95
-	quantileP99     = 99
-)
-
-func NewMonitorWithClients(cfg *config.KMonConfig, producerClient clients.KgoClient, consumerClient clients.KgoClient, adminClient clients.KadmClient, instanceUUID string) *Monitor {
-	return &Monitor{
-		config:         cfg,
-		producerClient: producerClient,
-		consumerClient: consumerClient,
-		adminClient:    adminClient,
-		instanceUUID:   instanceUUID,
-		partitionStats: make(map[int32]*partitionMetrics),
+func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions []int32, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
+	m := &Monitor{
+		producerClient:  producerClient,
+		producerTopic:   producerTopic,
+		consumerClient:  consumerClient,
+		instanceUUID:    instanceUUID,
+		partitions:      partitions,
+		sampleFrequency: sampleFrequency,
 	}
+	m.partitionStats = make(map[int32]*partitionMetrics)
+	for _, p := range m.partitions {
+		m.partitionStats[p] = newPartitionMetrics(statsWindow)
+	}
+	return m
 }
 
-func NewMonitorFromConfig(cfg *config.KMonConfig) (*Monitor, error) {
-	if cfg == nil || cfg.ProducerKafkaConfig == nil {
-		return nil, fmt.Errorf("producer kafka config is required")
-	}
-
+// TODO: Cross-cluster measurements should ignore partitions on e2e and not measure b2c
+func NewMonitorFromConfig(cfg config.KMonConfig, partitions []int32) (*Monitor, error) {
 	producerOpts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.ProducerKafkaConfig.SeedBrokers...),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -85,12 +76,13 @@ func NewMonitorFromConfig(cfg *config.KMonConfig) (*Monitor, error) {
 		}
 	}
 
-	adminClient := kadm.NewClient(producerClient)
-
 	// Generate a unique UUID for this Monitor instance
 	instanceUUID := uuid.NewString()
 
-	return NewMonitorWithClients(cfg, &clients.KgoClientWrapper{Client: producerClient}, &clients.KgoClientWrapper{Client: consumerClient}, adminClient, instanceUUID), nil
+	sampleFrequency := time.Duration(cfg.SampleFrequencyMs) * time.Millisecond
+	statsWindow := time.Duration(cfg.StatsWindowSeconds) * time.Second
+
+	return NewMonitorWithClients(producerClient, cfg.ProducerMonitoringTopic, consumerClient, instanceUUID, partitions, sampleFrequency, statsWindow), nil
 }
 
 func (m *Monitor) Start(ctx context.Context) {
@@ -99,15 +91,9 @@ func (m *Monitor) Start(ctx context.Context) {
 		defer m.consumerClient.Close()
 	}
 
-	if err := m.initialisePartitions(ctx); err != nil {
-		log.Error().Err(err).Msg("failed to initialise partitions")
-		return
-	}
-
 	go m.consumeLoop(ctx)
 
-	interval := m.sampleInterval()
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(m.sampleFrequency)
 	defer ticker.Stop()
 
 	for {
@@ -128,12 +114,11 @@ func (m *Monitor) publishProbeBatch(ctx context.Context) {
 
 func (m *Monitor) publishProbe(ctx context.Context, partition int32) {
 	sentAt := time.Now()
-	topic := m.config.ProducerMonitoringTopic
 	record := &kgo.Record{
-		Topic:     topic,
+		Topic:     m.producerTopic,
 		Partition: partition,
 		Key:       []byte(m.instanceUUID),
-		Value:     []byte(fmt.Sprintf("%d", sentAt.UnixNano())),
+		Value:     fmt.Appendf(nil, "%d", sentAt.UnixNano()),
 	}
 
 	partitionLabel := m.partitionLabel(partition)
@@ -151,22 +136,24 @@ func (m *Monitor) publishProbe(ctx context.Context, partition int32) {
 
 func (m *Monitor) consumeLoop(ctx context.Context) {
 	for {
-		if ctx.Err() != nil {
-			return
-		}
-
 		fetches := m.consumerClient.PollFetches(ctx)
-		if fetches.IsClientClosed() {
+
+		select {
+		case <-ctx.Done():
 			return
+		default:
+			if fetches.IsClientClosed() {
+				return
+			}
+
+			fetches.EachError(func(topic string, partition int32, err error) {
+				log.Error().Err(err).Msgf("kafka fetch error on %s[%d]", topic, partition)
+			})
+
+			fetches.EachRecord(func(record *kgo.Record) {
+				go m.handleConsumedRecord(record)
+			})
 		}
-
-		fetches.EachError(func(topic string, partition int32, err error) {
-			log.Error().Err(err).Msgf("kafka fetch error on %s[%d]", topic, partition)
-		})
-
-		fetches.EachRecord(func(record *kgo.Record) {
-			go m.handleConsumedRecord(record)
-		})
 	}
 }
 
@@ -192,53 +179,12 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record) {
 	m.getPartitionMetrics(partition).recordE2E(partitionLabel, e2eLatencyMs)
 }
 
-func (m *Monitor) initialisePartitions(ctx context.Context) error {
-	topic := m.config.ProducerMonitoringTopic
-	log.Info().Msgf("Initialising partitions for topic %s", topic)
-	metadata, err := m.adminClient.ListTopics(ctx, topic)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to list topics")
-		return err
-	}
-
-	details, ok := metadata[topic]
-	if !ok {
-		log.Error().Msgf("topic %s not found in metadata", topic)
-		return fmt.Errorf("topic %s not found", topic)
-	}
-
-	log.Info().Msgf("Found %d partitions for topic %s", len(details.Partitions), topic)
-
-	partitions := make([]int32, 0, len(details.Partitions))
-	for partition := range details.Partitions {
-		partitions = append(partitions, partition)
-	}
-	slices.Sort(partitions)
-
-	m.partitions = partitions
-	for _, partition := range partitions {
-		m.partitionStats[partition] = newPartitionMetrics(statsWindow)
-	}
-
-	MonitoringTopicPartitionCount.Set(float64(len(partitions)))
-	return nil
-}
-
 func (m *Monitor) getPartitionMetrics(partition int32) *partitionMetrics {
 	return m.partitionStats[partition]
 }
 
 func (m *Monitor) partitionLabel(partition int32) string {
 	return fmt.Sprintf("%d", partition)
-}
-
-// TODO: Move to config
-func (m *Monitor) sampleInterval() time.Duration {
-	intervalMs := m.config.SampleFrequencyMs
-	if intervalMs <= 0 {
-		intervalMs = defaultSampleMs
-	}
-	return time.Duration(intervalMs) * time.Millisecond
 }
 
 func newPartitionMetrics(window time.Duration) *partitionMetrics {
@@ -261,8 +207,8 @@ func (pm *partitionMetrics) recordE2E(partitionLabel string, latencyMs float64) 
 }
 
 func (pm *partitionMetrics) updateQuantiles(stats *utils.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
-	res, ok := stats.Percentile([]float64{quantileP50, quantileP95, quantileP99})
-	if !ok || len(res) < 3 {
+	res, ok := stats.Percentile([]float64{50, 95, 99})
+	if !ok {
 		return
 	}
 	gauge.WithLabelValues(partitionLabel, "p50").Set(float64(res[0]))

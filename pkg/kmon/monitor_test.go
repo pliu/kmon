@@ -10,18 +10,15 @@ import (
 
 	"github.com/benbjohnson/clock"
 	"github.com/pliu/kmon/pkg/clients"
-	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/utils"
-	"github.com/stretchr/testify/assert"
-	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // MockKgoClient is a mock implementation of the KgoClient interface
 type MockKgoClient struct {
 	clients.KgoClient
-	ProduceFunc     func(context.Context, *kgo.Record, func(*kgo.Record, error))
-	PollFetchesFunc func(context.Context) clients.KgoFetches
+	ProduceFunc func(context.Context, *kgo.Record, func(*kgo.Record, error))
 }
 
 func (m *MockKgoClient) Produce(ctx context.Context, r *kgo.Record, f func(*kgo.Record, error)) {
@@ -30,73 +27,15 @@ func (m *MockKgoClient) Produce(ctx context.Context, r *kgo.Record, f func(*kgo.
 	}
 }
 
-func (m *MockKgoClient) PollFetches(ctx context.Context) clients.KgoFetches {
-	if m.PollFetchesFunc != nil {
-		return m.PollFetchesFunc(ctx)
-	}
-	return &MockKgoFetches{}
+func (m *MockKgoClient) PollFetches(ctx context.Context) kgo.Fetches {
+	return kgo.Fetches{}
 }
 
 func (m *MockKgoClient) Close() {}
 
-// MockKgoFetches is a mock implementation of the KgoFetches interface
-type MockKgoFetches struct {
-	clients.KgoFetches
-	EachRecordFunc func(func(*kgo.Record))
-}
-
-func (m *MockKgoFetches) EachRecord(f func(*kgo.Record)) {
-	if m.EachRecordFunc != nil {
-		m.EachRecordFunc(f)
-	}
-}
-
-// MockKadmClient is a mock implementation of the KadmClient interface
-type MockKadmClient struct {
-	clients.KadmClient
-	ListTopicsFunc func(context.Context, ...string) (kadm.TopicDetails, error)
-}
-
-func (m *MockKadmClient) ListTopics(ctx context.Context, topics ...string) (kadm.TopicDetails, error) {
-	if m.ListTopicsFunc != nil {
-		return m.ListTopicsFunc(ctx, topics...)
-	}
-	return nil, nil
-}
-
-func (m *MockKadmClient) Close() {}
-
-func TestInitialisePartitions(t *testing.T) {
-	mockKadmClient := &MockKadmClient{
-		ListTopicsFunc: func(ctx context.Context, topics ...string) (kadm.TopicDetails, error) {
-			return kadm.TopicDetails{
-				"test-topic": {
-					Partitions: map[int32]kadm.PartitionDetail{
-						1: {},
-						0: {},
-						2: {},
-					},
-				},
-			}, nil
-		},
-	}
-
-	m := NewMonitorWithClients(&config.KMonConfig{
-		ProducerMonitoringTopic: "test-topic",
-	}, nil, nil, mockKadmClient, "test-uuid")
-
-	err := m.initialisePartitions(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, []int32{0, 1, 2}, m.partitions)
-}
-
 func TestHandleConsumedRecord(t *testing.T) {
 	// Create a Monitor instance with mock clients
-	m := NewMonitorWithClients(&config.KMonConfig{}, &MockKgoClient{}, &MockKgoClient{}, &MockKadmClient{}, "test-uuid")
-	m.partitions = []int32{0, 1, 2}
-	for _, p := range m.partitions {
-		m.partitionStats[p] = newPartitionMetrics(5 * time.Minute)
-	}
+	m := NewMonitorWithClients(&MockKgoClient{}, "", &MockKgoClient{}, "test-uuid", []int32{0, 1, 2}, time.Duration(1), time.Duration(5)*time.Minute)
 
 	// Create a stats object to record the latency of the handleConsumedRecord function
 	handleConsumedRecordStats := utils.NewStatsWithClock(1*time.Second, clock.NewMock())
@@ -118,15 +57,15 @@ func TestHandleConsumedRecord(t *testing.T) {
 	}
 
 	// Check if the E2E latency metric has been updated for each partition
-	for _, p := range m.partitions {
-		assert.Equal(t, m.partitionStats[p].e2e.Len(), 400)
+	for _, ps := range m.partitionStats {
+		require.Equal(t, ps.e2e.Len(), 400)
 	}
 
 	// Print the stats of the handleConsumedRecord function
 	avg, ok := handleConsumedRecordStats.Average()
-	assert.True(t, ok)
+	require.True(t, ok)
 	percentiles, ok := handleConsumedRecordStats.Percentile([]float64{50, 99})
-	assert.True(t, ok)
+	require.True(t, ok)
 	t.Logf("Average latency: %.2fµs", avg/1000)
 	t.Logf("Median latency: %dµs", percentiles[0]/1000)
 	t.Logf("p99 latency: %dµs", percentiles[1]/1000)
@@ -144,34 +83,52 @@ func TestHandleConsumedRecord(t *testing.T) {
 		}
 	}
 
-	for _, p := range m.partitions {
-		assert.Equal(t, m.partitionStats[p].e2e.Len(), 400)
+	for _, ps := range m.partitionStats {
+		require.Equal(t, ps.e2e.Len(), 400)
 	}
 }
 
-func TestPublishProbe(t *testing.T) {
-	var producedRecord *kgo.Record
+func TestPublishProbeBatch(t *testing.T) {
+	// Track all produced records
+	var producedRecords []*kgo.Record
+
+	// Create mock client that captures all produced records
 	mockProducerClient := &MockKgoClient{
 		ProduceFunc: func(ctx context.Context, r *kgo.Record, f func(*kgo.Record, error)) {
-			producedRecord = r
+			producedRecords = append(producedRecords, r)
 			f(r, nil) // call the callback
 		},
 	}
 
-	m := NewMonitorWithClients(&config.KMonConfig{
-		ProducerMonitoringTopic: "test-topic",
-	}, mockProducerClient, nil, nil, "test-uuid")
-	m.partitionStats[1] = newPartitionMetrics(5 * time.Minute)
+	// Create monitor with multiple partitions
+	partitions := []int32{0, 1, 2}
+	m := NewMonitorWithClients(mockProducerClient, "test-topic", nil, "test-uuid", partitions, time.Duration(1), time.Duration(5)*time.Minute)
 
-	m.publishProbe(context.Background(), 1)
+	// Call publishProbeBatch which should call publishProbe for each partition
+	ctx := context.Background()
+	m.publishProbeBatch(ctx)
 
-	assert.NotNil(t, producedRecord)
-	assert.Equal(t, "test-topic", producedRecord.Topic)
-	assert.Equal(t, int32(1), producedRecord.Partition)
-	assert.Equal(t, "test-uuid", string(producedRecord.Key))
+	// Verify that records were produced for each partition
+	require.Equal(t, len(partitions), len(producedRecords))
 
-	// Check the timestamp in the value
-	timestamp, err := strconv.ParseInt(string(producedRecord.Value), 10, 64)
-	assert.NoError(t, err)
-	assert.InDelta(t, time.Now().UnixNano(), timestamp, float64(time.Second))
+	// Check that each partition has a corresponding record
+	expectedPartitions := make(map[int32]bool)
+	for _, record := range producedRecords {
+		require.Equal(t, "test-topic", record.Topic)
+		require.Contains(t, partitions, record.Partition)
+		require.Equal(t, "test-uuid", string(record.Key))
+		expectedPartitions[record.Partition] = true
+
+		// Check the timestamp in the value
+		timestamp, err := strconv.ParseInt(string(record.Value), 10, 64)
+		require.NoError(t, err)
+		require.InDelta(t, time.Now().UnixNano(), timestamp, float64(time.Second))
+	}
+	require.Equal(t, len(partitions), len(m.partitionStats))
+
+	// Ensure all partitions were covered
+	for _, p := range partitions {
+		require.True(t, expectedPartitions[p], "Partition %d should have been probed", p)
+		require.Equal(t, 1, m.partitionStats[p].p2b.Len())
+	}
 }

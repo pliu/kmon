@@ -2,57 +2,259 @@ package kmon
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
+	"time"
 
+	"github.com/phuslu/log"
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/utils"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// TODO: Figure out how topic manager manages topics across clusters for cross-cluster measurement
+// TODO: Figure out how to get partition list out of this object back up to the kmon object
 type TopicManager struct {
-	config           config.KMonConfig
-	kafkaAdminClient *kadm.Client
+	client                  *kgo.Client
+	admClient               *kadm.Client
+	topicName               string
+	reconciliationInterval  time.Duration
+	previousBrokerSet       *utils.Set[int32]
+	changeDetectedCallback  func()
+	doneReconcilingCallback func()
 }
 
-// PartitionLeaderMove describes a planned leader change for a single partition.
-type PartitionLeaderMove struct {
-	Partition     int32
-	CurrentLeader int32
-	TargetLeader  int32
-}
-
-// LeaderReassignmentPlan captures the set of leader moves required to satisfy leader coverage.
-type LeaderReassignmentPlan struct {
-	Topic string
-	Moves []PartitionLeaderMove
-}
-
-func NewTopicManager(config config.KMonConfig, adminClient *kadm.Client) *TopicManager {
-	return &TopicManager{
-		config:           config,
-		kafkaAdminClient: adminClient,
+func NewTopicManagerWithClients(client *kgo.Client, topicName string, reconciliationInterval time.Duration) *TopicManager {
+	tm := &TopicManager{
+		client:                 client,
+		admClient:              kadm.NewClient(client),
+		topicName:              topicName,
+		reconciliationInterval: reconciliationInterval,
 	}
+	return tm
+}
+
+func NewTopicManagerFromConfig(cfg *config.KMonConfig) (*TopicManager, error) {
+	clientOpts := []kgo.Opt{
+		kgo.SeedBrokers(cfg.ProducerKafkaConfig.SeedBrokers...),
+	}
+
+	client, err := kgo.NewClient(clientOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewTopicManagerWithClients(client, cfg.ProducerMonitoringTopic, time.Duration(cfg.TopicReconciliationFrequencyMin)*time.Minute), nil
+}
+
+func (tm *TopicManager) Start(ctx context.Context) {
+	defer tm.admClient.Close()
+
+	ticker := time.NewTicker(tm.reconciliationInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = tm.maybeReconcileTopic(ctx)
+		}
+	}
+}
+
+func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
+	partitions, err := tm.getTopicPartitions(ctx)
+	if err != nil {
+		return err
+	}
+
+	brokerIDs, err := tm.getAllBrokers(ctx)
+	if err != nil {
+		return err
+	}
+
+	if partitions == nil {
+		tm.changeDetectedCallback()
+		err = tm.createTopic(ctx, brokerIDs)
+		if err != nil {
+			return err
+		}
+		tm.waitUntilTopicExists((ctx))
+		tm.doneReconcilingCallback()
+		return nil
+	}
+
+	if len(partitions) != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
+		tm.changeDetectedCallback()
+		err = tm.reconcileTopic(ctx, brokerIDs)
+		if err != nil {
+			return err
+		}
+		tm.doneReconcilingCallback()
+	}
+
+	return nil
+}
+
+func (tm *TopicManager) getTopicPartitions(ctx context.Context) ([]int32, error) {
+	topicDetails, err := tm.admClient.ListTopics(ctx, tm.topicName)
+	if err != nil {
+		return nil, err
+	}
+
+	if td, exists := topicDetails[tm.topicName]; exists {
+		if td.Err == nil {
+			if exists {
+				return td.Partitions.Numbers(), nil
+			}
+			log.Info().Msg("1")
+			return nil, nil
+		}
+		var kafkaErr *kerr.Error
+		if errors.As(td.Err, &kafkaErr) {
+			if kafkaErr == kerr.UnknownTopicOrPartition {
+				log.Info().Msg("2") // <-
+				return nil, nil
+			}
+		}
+		return nil, td.Err
+	}
+
+	log.Info().Msg("3")
+	return nil, nil
+}
+
+func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
+	createTopicsRequest := kmsg.NewCreateTopicsRequest()
+	topic := kmsg.NewCreateTopicsRequestTopic()
+	topic.Topic = tm.topicName
+	topic.NumPartitions = -1
+	topic.ReplicationFactor = -1
+	topic.Configs = tm.generateTopicConfigs()
+	topic.ReplicaAssignment = tm.generatePartitionAssignment(brokerIDs)
+	createTopicsRequest.Topics = append(createTopicsRequest.Topics, topic)
+
+	resp, err := createTopicsRequest.RequestWith(ctx, tm.client)
+	if err != nil {
+		return err
+	}
+	for _, tr := range resp.Topics {
+		if tr.ErrorCode != 0 {
+			return fmt.Errorf("%s", *tr.ErrorMessage)
+		}
+	}
+
+	tm.previousBrokerSet = brokerIDs
+
+	return nil
+}
+
+func (tm *TopicManager) generateTopicConfigs() []kmsg.CreateTopicsRequestTopicConfig {
+	topicConfigs := []kmsg.CreateTopicsRequestTopicConfig{}
+	configs := map[string]string{
+		"message.timestamp.type": "LogAppendTime",
+		"min.insync.replicas":    "1",
+	}
+	for k, v := range configs {
+		topicConfig := kmsg.NewCreateTopicsRequestTopicConfig()
+		topicConfig.Name = k
+		topicConfig.Value = &v
+		topicConfigs = append(topicConfigs, topicConfig)
+	}
+	return topicConfigs
+}
+
+// Partitions are given only 1 replica to avoid the leader automatically moving if the desired primary broker is down
+// (this allows us to test individual brokers)
+// TODO: Use more replicas for cross-cluster testing?
+func (tm *TopicManager) generatePartitionAssignment(brokerIDs *utils.Set[int32]) []kmsg.CreateTopicsRequestTopicReplicaAssignment {
+	replicaAssignments := []kmsg.CreateTopicsRequestTopicReplicaAssignment{}
+	for i, brokerIDs := range brokerIDs.Items() {
+		replicaAssignment := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
+		replicaAssignment.Partition = int32(i)
+		replicaAssignment.Replicas = []int32{brokerIDs}
+		replicaAssignments = append(replicaAssignments, replicaAssignment)
+	}
+	return replicaAssignments
+}
+
+func (tm *TopicManager) waitUntilTopicExists(ctx context.Context) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		partitions, err := tm.getTopicPartitions(ctx)
+		if err == nil && partitions != nil {
+			return
+		}
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (tm *TopicManager) waitUntilTopicNoLongerExists(ctx context.Context) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		partitions, err := tm.getTopicPartitions(ctx)
+		if err == nil && partitions == nil {
+			return
+		}
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
+	_, err := tm.admClient.DeleteTopic(ctx, tm.topicName)
+	if err != nil {
+		return err
+	}
+	tm.waitUntilTopicNoLongerExists(ctx)
+	err = tm.createTopic(ctx, brokerIDs)
+	if err != nil {
+		return err
+	}
+	tm.waitUntilTopicExists(ctx)
+	return nil
 }
 
 // GetAllBrokers gets all unique broker IDs from both the admin client's list of brokers
 // and from the replicas of all topic partitions.
-func (tm *TopicManager) GetAllBrokers(ctx context.Context) ([]int32, error) {
+func (tm *TopicManager) getAllBrokers(ctx context.Context) (*utils.Set[int32], error) {
 	brokerIDs := utils.NewSet[int32]()
 
-	brokerDetails, err := tm.kafkaAdminClient.ListBrokers(ctx)
+	brokerDetails, err := tm.admClient.ListBrokers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for id := range brokerDetails {
-		brokerIDs.Add(int32(id))
+	for _, bd := range brokerDetails {
+		brokerIDs.Add(int32(bd.NodeID))
 	}
 
-	topicDetails, err := tm.kafkaAdminClient.ListTopics(ctx)
+	topicDetails, err := tm.admClient.ListTopics(ctx)
 	if err != nil {
 		return nil, err
 	}
-
 	for _, td := range topicDetails {
 		for _, p := range td.Partitions {
 			for _, r := range p.Replicas {
@@ -61,124 +263,5 @@ func (tm *TopicManager) GetAllBrokers(ctx context.Context) ([]int32, error) {
 		}
 	}
 
-	return brokerIDs.Values(), nil
-}
-
-// AddPartitions adds new partitions to an existing topic.
-func (tm *TopicManager) AddPartitions(ctx context.Context, topicName string, partitionsToAdd int32) error {
-	responses, err := tm.kafkaAdminClient.CreatePartitions(ctx, int(partitionsToAdd), topicName)
-	if err != nil {
-		return err
-	}
-
-	resp, err := responses.On(topicName, nil)
-	if err != nil {
-		return err
-	}
-
-	return resp.Err
-}
-
-// PlanLeaderCoverage ensures every broker has at least one leader for the topic by planning leader moves.
-
-func (tm *TopicManager) PlanLeaderCoverage(ctx context.Context, topicName string, brokersSet *utils.Set[int32]) (LeaderReassignmentPlan, error) {
-	plan := LeaderReassignmentPlan{Topic: topicName}
-
-	brokers := brokersSet.Values()
-	sort.Slice(brokers, func(i, j int) bool { return brokers[i] < brokers[j] })
-
-	if len(brokers) == 0 {
-		return plan, nil
-	}
-
-	topicDetails, err := tm.kafkaAdminClient.ListTopics(ctx, topicName)
-	if err != nil {
-		return plan, fmt.Errorf("list topics for %s: %w", topicName, err)
-	}
-
-	td, ok := topicDetails[topicName]
-	if !ok {
-		return plan, fmt.Errorf("topic %s not found", topicName)
-	}
-	if td.Err != nil {
-		return plan, fmt.Errorf("load topic metadata for %s: %w", topicName, td.Err)
-	}
-	if len(td.Partitions) == 0 {
-		return plan, fmt.Errorf("topic %s has no partitions", topicName)
-	}
-	if len(td.Partitions) < len(brokers) {
-		return plan, fmt.Errorf("insufficient partitions to cover brokers for topic %s", topicName)
-	}
-
-	adjacency := make(map[int32][]int32, len(brokers))
-	for _, id := range brokers {
-		adjacency[id] = nil
-	}
-
-	for _, pd := range td.Partitions {
-		if pd.Err != nil {
-			return plan, fmt.Errorf("partition %d metadata error: %w", pd.Partition, pd.Err)
-		}
-		for _, replica := range pd.Replicas {
-			if brokersSet.Contains(replica) {
-				adjacency[replica] = append(adjacency[replica], pd.Partition)
-			}
-		}
-	}
-
-	for broker, partitions := range adjacency {
-		if len(partitions) == 0 {
-			return plan, fmt.Errorf("broker %d is not a replica for topic %s", broker, topicName)
-		}
-		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
-		adjacency[broker] = partitions
-	}
-
-	matchPartition := make(map[int32]int32)
-	var dfs func(int32, map[int32]bool) bool
-	dfs = func(broker int32, visited map[int32]bool) bool {
-		for _, partition := range adjacency[broker] {
-			if visited[partition] {
-				continue
-			}
-			visited[partition] = true
-			if current, ok := matchPartition[partition]; !ok || dfs(current, visited) {
-				matchPartition[partition] = broker
-				return true
-			}
-		}
-		return false
-	}
-
-	for _, broker := range brokers {
-		if !dfs(broker, make(map[int32]bool)) {
-			return plan, fmt.Errorf("unable to plan leader coverage for topic %s", topicName)
-		}
-	}
-
-	brokerAssignment := make(map[int32]int32, len(brokers))
-	for partition, broker := range matchPartition {
-		brokerAssignment[broker] = partition
-	}
-	if len(brokerAssignment) != len(brokers) {
-		return plan, fmt.Errorf("incomplete leader coverage plan for topic %s", topicName)
-	}
-
-	for _, broker := range brokers {
-		partition, ok := brokerAssignment[broker]
-		if !ok {
-			return plan, fmt.Errorf("missing partition assignment for broker %d on topic %s", broker, topicName)
-		}
-		pd := td.Partitions[partition]
-		if pd.Leader == broker {
-			continue
-		}
-		plan.Moves = append(plan.Moves, PartitionLeaderMove{
-			Partition:     partition,
-			CurrentLeader: pd.Leader,
-			TargetLeader:  broker,
-		})
-	}
-
-	return plan, nil
+	return brokerIDs, nil
 }

@@ -14,7 +14,7 @@ unit_tests: lint
 	$(GO_CMD) test $(GO_TEST_FLAGS) ./...
 
 all_tests: lint
-	$(GO_CMD) test $(GO_TEST_FLAGS) -tags kafka ./...
+	$(GO_CMD) test $(GO_TEST_FLAGS) -tags integration ./...
 
 clean:
 	$(GO_CMD) clean -cache
@@ -26,3 +26,9 @@ fmt:
 
 lint:
 	golangci-lint run
+
+start_kafka:
+	docker compose -f docker-compose.yml up -d
+
+stop_kafka:
+	docker compose -f docker-compose.yml down
