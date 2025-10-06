@@ -24,21 +24,7 @@ A Kafka monitoring tool written in Go to provide insights into Kafka cluster per
 Build the binary and start collecting metrics via the provided `Makefile` targets.
 
 ```sh
-# format, lint, test, then compile to build/kmon
 make build
-
-# run the compiled binary
-make run
-```
-
-```sh
-./kmon
-```
-
-For more detailed logging, you can use the `-debug` flag:
-
-```sh
-./kmon -debug
 ```
 
 ## Testing

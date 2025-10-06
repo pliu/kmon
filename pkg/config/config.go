@@ -6,7 +6,7 @@ type KMonConfig struct {
 	ProducerMonitoringTopic         string
 	ConsumerMonitoringTopic         string
 	SampleFrequencyMs               int
-	StatsWindowSeconds				int
+	StatsWindowSeconds              int
 	TopicReconciliationFrequencyMin int
 }
 

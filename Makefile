@@ -7,9 +7,6 @@ GO_TEST_FLAGS = -v -count=1
 build: unit_tests
 	$(GO_CMD) build $(GO_BUILD_FLAGS) -o build/kmon .
 
-run:
-	./kmon
-
 unit_tests: lint
 	$(GO_CMD) test $(GO_TEST_FLAGS) ./...
 
@@ -24,7 +21,7 @@ clean:
 fmt:
 	$(GO_CMD) fmt ./...
 
-lint:
+lint: fmt
 	golangci-lint run
 
 start_kafka:

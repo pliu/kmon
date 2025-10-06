@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/phuslu/log"
+	"github.com/pliu/kmon/pkg/clients"
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/utils"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -38,11 +38,7 @@ func NewTopicManagerWithClients(client *kgo.Client, topicName string, reconcilia
 }
 
 func NewTopicManagerFromConfig(cfg *config.KMonConfig) (*TopicManager, error) {
-	clientOpts := []kgo.Opt{
-		kgo.SeedBrokers(cfg.ProducerKafkaConfig.SeedBrokers...),
-	}
-
-	client, err := kgo.NewClient(clientOpts...)
+	client, err := clients.GetFranzGoClient(cfg.ProducerKafkaConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +75,9 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 
 	if partitions == nil {
 		tm.changeDetectedCallback()
-		err = tm.createTopic(ctx, brokerIDs)
-		if err != nil {
-			return err
+		for err = tm.createTopic(ctx, brokerIDs); err != nil; {
+			time.Sleep(1 * time.Second)
+			err = tm.createTopic(ctx, brokerIDs)
 		}
 		tm.waitUntilTopicExists((ctx))
 		tm.doneReconcilingCallback()
@@ -90,10 +86,7 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 
 	if len(partitions) != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
 		tm.changeDetectedCallback()
-		err = tm.reconcileTopic(ctx, brokerIDs)
-		if err != nil {
-			return err
-		}
+		_ = tm.reconcileTopic(ctx, brokerIDs)
 		tm.doneReconcilingCallback()
 	}
 
@@ -108,23 +101,17 @@ func (tm *TopicManager) getTopicPartitions(ctx context.Context) ([]int32, error)
 
 	if td, exists := topicDetails[tm.topicName]; exists {
 		if td.Err == nil {
-			if exists {
-				return td.Partitions.Numbers(), nil
-			}
-			log.Info().Msg("1")
-			return nil, nil
+			return td.Partitions.Numbers(), nil
 		}
 		var kafkaErr *kerr.Error
 		if errors.As(td.Err, &kafkaErr) {
 			if kafkaErr == kerr.UnknownTopicOrPartition {
-				log.Info().Msg("2") // <-
 				return nil, nil
 			}
 		}
 		return nil, td.Err
 	}
 
-	log.Info().Msg("3")
 	return nil, nil
 }
 
@@ -182,45 +169,31 @@ func (tm *TopicManager) generatePartitionAssignment(brokerIDs *utils.Set[int32])
 	return replicaAssignments
 }
 
+// This waits for 5 successes as each ListTopics is a metadata call to a random broker.
+// Writes (e.g., create, delete) go through the coordinator but take time to propogate to other brokers, resulting in eventual consistency.
 func (tm *TopicManager) waitUntilTopicExists(ctx context.Context) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		partitions, err := tm.getTopicPartitions(ctx)
-		if err == nil && partitions != nil {
-			return
+	for i := 0; i < 5; {
+		topics, err := tm.admClient.ListTopics(ctx, tm.topicName)
+		if err == nil {
+			td, exists := topics[tm.topicName]
+			if exists && td.Err == nil {
+				i += 1
+			}
 		}
-		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
 func (tm *TopicManager) waitUntilTopicNoLongerExists(ctx context.Context) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		partitions, err := tm.getTopicPartitions(ctx)
-		if err == nil && partitions == nil {
-			return
+	for i := 0; i < 5; {
+		topics, err := tm.admClient.ListTopics(ctx)
+		if err == nil {
+			td, exists := topics[tm.topicName]
+			if !exists || errors.Is(td.Err, kerr.UnknownTopicOrPartition) {
+				i += 1
+			}
 		}
-		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -230,9 +203,9 @@ func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set
 		return err
 	}
 	tm.waitUntilTopicNoLongerExists(ctx)
-	err = tm.createTopic(ctx, brokerIDs)
-	if err != nil {
-		return err
+	for err = tm.createTopic(ctx, brokerIDs); err != nil; {
+		time.Sleep(1 * time.Second)
+		err = tm.createTopic(ctx, brokerIDs)
 	}
 	tm.waitUntilTopicExists(ctx)
 	return nil

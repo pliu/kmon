@@ -48,7 +48,7 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 }
 
 // TODO: Cross-cluster measurements should ignore partitions on e2e and not measure b2c
-func NewMonitorFromConfig(cfg config.KMonConfig, partitions []int32) (*Monitor, error) {
+func NewMonitorFromConfig(cfg *config.KMonConfig, partitions []int32) (*Monitor, error) {
 	producerOpts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.ProducerKafkaConfig.SeedBrokers...),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
@@ -57,6 +57,7 @@ func NewMonitorFromConfig(cfg config.KMonConfig, partitions []int32) (*Monitor, 
 		producerOpts = append(producerOpts, kgo.ConsumeTopics(cfg.ProducerMonitoringTopic))
 	}
 
+	// TODO: Use GetFranzGoClient
 	producerClient, err := kgo.NewClient(producerOpts...)
 	if err != nil {
 		return nil, err
@@ -69,6 +70,7 @@ func NewMonitorFromConfig(cfg config.KMonConfig, partitions []int32) (*Monitor, 
 			kgo.ConsumeTopics(cfg.ConsumerMonitoringTopic),
 		}
 
+		// TODO: Use GetFranzGoClient
 		consumerClient, err = kgo.NewClient(consumerOpts...)
 		if err != nil {
 			producerClient.Close()
@@ -91,6 +93,8 @@ func (m *Monitor) Start(ctx context.Context) {
 		defer m.consumerClient.Close()
 	}
 
+	m.Warmup()
+
 	go m.consumeLoop(ctx)
 
 	ticker := time.NewTicker(m.sampleFrequency)
@@ -104,6 +108,10 @@ func (m *Monitor) Start(ctx context.Context) {
 			go m.publishProbeBatch(ctx)
 		}
 	}
+}
+
+func (m *Monitor) Warmup() {
+
 }
 
 func (m *Monitor) publishProbeBatch(ctx context.Context) {
@@ -196,13 +204,11 @@ func newPartitionMetrics(window time.Duration) *partitionMetrics {
 
 func (pm *partitionMetrics) recordP2B(partitionLabel string, latencyMs float64) {
 	pm.p2b.Add(int64(latencyMs))
-	P2BMessageLatencyHistogram.WithLabelValues(partitionLabel).Observe(latencyMs)
 	pm.updateQuantiles(pm.p2b, P2BMessageLatencyQuantile, partitionLabel)
 }
 
 func (pm *partitionMetrics) recordE2E(partitionLabel string, latencyMs float64) {
 	pm.e2e.Add(int64(latencyMs))
-	E2EMessageLatencyHistogram.WithLabelValues(partitionLabel).Observe(latencyMs)
 	pm.updateQuantiles(pm.e2e, E2EMessageLatencyQuantile, partitionLabel)
 }
 

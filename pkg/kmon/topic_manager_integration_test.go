@@ -62,7 +62,6 @@ func TestTopicManagerMaybeReconcileTopicIncorrectTopic(t *testing.T) {
 	require.Equal(t, 1, len(partitions))
 
 	require.NoError(t, tm.maybeReconcileTopic(ctx))
-
 	partitions, err = tm.getTopicPartitions(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 3, len(partitions))
