@@ -33,6 +33,7 @@ func main() {
 
 	if *debug {
 		log.DefaultLogger.Level = log.DebugLevel
+		log.Debug().Msg("Debug logging enabled")
 	}
 
 	log.Info().Msgf("Using config file: %s", *configPath)
@@ -50,6 +51,7 @@ func main() {
 
 	m, err := kmon.NewMonitorFromConfig(&config.KMonConfig{}, []int32{})
 	if err != nil {
+		// TODO log inside
 		log.Fatal().Err(err).Msg("failed to create monitor instance")
 	}
 	m.Start(ctx)

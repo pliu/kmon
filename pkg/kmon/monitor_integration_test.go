@@ -15,11 +15,9 @@ import (
 )
 
 func TestMonitorIntegration(t *testing.T) {
-	// This test requires a running Kafka instance
 	seedBrokers := []string{"localhost:10000"}
 	topic := fmt.Sprintf("test-topic-%d", time.Now().UnixNano())
 
-	// Create a topic for the test
 	client, err := kgo.NewClient(kgo.SeedBrokers(seedBrokers...))
 	require.NoError(t, err)
 	adminClient := kadm.NewClient(client)
@@ -32,31 +30,29 @@ func TestMonitorIntegration(t *testing.T) {
 	// Give the topic time to be created
 	time.Sleep(1 * time.Second)
 
-	// Create a Monitor instance
-	cfg := config.KMonConfig{
+	cfg := &config.KMonConfig{
 		ProducerMonitoringTopic: topic,
 		ProducerKafkaConfig: &config.KafkaConfig{
 			SeedBrokers: seedBrokers,
 		},
 		SampleFrequencyMs:  50,
-		StatsWindowSeconds: 60,
+		StatsWindowSeconds: 10,
 	}
 	m, err := NewMonitorFromConfig(cfg, partitions)
 	require.NoError(t, err)
 
-	// Start Monitor in a goroutine
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	go m.Start(ctx)
 
 	// Wait for some probes to be sent and consumed
-	time.Sleep(4 * time.Second)
+	time.Sleep(14 * time.Second)
 
-	// Check that the partition stats have been updated
 	require.NotEmpty(t, m.partitionStats)
 	for p, ps := range m.partitionStats {
 		require.Greater(t, ps.e2e.Len(), 0)
 		require.Greater(t, ps.p2b.Len(), 0)
+		require.Greater(t, ps.b2c.Len(), 0)
 
 		avg, ok := ps.e2e.Average()
 		require.True(t, ok)

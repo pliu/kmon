@@ -27,17 +27,25 @@ var (
 		},
 		[]string{"partition", "quantile"},
 	)
-	ProduceFailureCount = promauto.NewCounterVec(
+	ProduceMessageCount = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kmon_produce_failure_count",
-			Help: "Total number of produce failures",
+			Name: "kmon_produce_message_count",
+			Help: "Total number of produced messages",
 		},
 		[]string{"partition"},
 	)
-	MonitoringTopicPartitionCount = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "kmon_monitoring_topic_partition_count",
-			Help: "Number of partitions in the monitoring topic",
+	ConsumeMessageCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kmon_consume_message_count",
+			Help: "Total number of consumed messages",
 		},
+		[]string{"partition"},
+	)
+	ProduceMessageFailureCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kmon_produce_message_failure_count",
+			Help: "Total number of produce message failures",
+		},
+		[]string{"partition"},
 	)
 )

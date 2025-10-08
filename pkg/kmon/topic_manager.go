@@ -27,23 +27,18 @@ type TopicManager struct {
 	doneReconcilingCallback func()
 }
 
-func NewTopicManagerWithClients(client *kgo.Client, topicName string, reconciliationInterval time.Duration) *TopicManager {
-	tm := &TopicManager{
-		client:                 client,
-		admClient:              kadm.NewClient(client),
-		topicName:              topicName,
-		reconciliationInterval: reconciliationInterval,
-	}
-	return tm
-}
-
 func NewTopicManagerFromConfig(cfg *config.KMonConfig) (*TopicManager, error) {
 	client, err := clients.GetFranzGoClient(cfg.ProducerKafkaConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewTopicManagerWithClients(client, cfg.ProducerMonitoringTopic, time.Duration(cfg.TopicReconciliationFrequencyMin)*time.Minute), nil
+	return &TopicManager{
+		client:                 client,
+		admClient:              kadm.NewClient(client),
+		topicName:              cfg.ProducerMonitoringTopic,
+		reconciliationInterval: time.Duration(cfg.GetTopicReconciliationFrequencyMin()) * time.Minute,
+	}, nil
 }
 
 func (tm *TopicManager) Start(ctx context.Context) {
@@ -145,6 +140,7 @@ func (tm *TopicManager) generateTopicConfigs() []kmsg.CreateTopicsRequestTopicCo
 	configs := map[string]string{
 		"message.timestamp.type": "LogAppendTime",
 		"min.insync.replicas":    "1",
+		"retention.ms":           "1800000",
 	}
 	for k, v := range configs {
 		topicConfig := kmsg.NewCreateTopicsRequestTopicConfig()
@@ -212,7 +208,8 @@ func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set
 }
 
 // GetAllBrokers gets all unique broker IDs from both the admin client's list of brokers
-// and from the replicas of all topic partitions.
+// and from the replicas of all topic partitions to get a stable list as the client's list
+// of brokers is only currently healthy brokers
 func (tm *TopicManager) getAllBrokers(ctx context.Context) (*utils.Set[int32], error) {
 	brokerIDs := utils.NewSet[int32]()
 

@@ -7,18 +7,22 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// KgoClient is an interface for the Kafka client
 type KgoClient interface {
 	Close()
 	Produce(context.Context, *kgo.Record, func(*kgo.Record, error))
 	PollFetches(context.Context) kgo.Fetches
 }
 
-// GetFranzGoClient returns a new franz-go kafka client
-func GetFranzGoClient(cfg *config.KafkaConfig) (*kgo.Client, error) {
+func GetFranzGoClient(cfg *config.KafkaConfig, consumeTopics ...string) (*kgo.Client, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.SeedBrokers...),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 	}
-	client, err := kgo.NewClient(opts...)
-	return client, err
+
+	if len(consumeTopics) > 0 {
+		opts = append(opts, kgo.ConsumeTopics(consumeTopics...))
+	}
+
+	return kgo.NewClient(opts...)
 }

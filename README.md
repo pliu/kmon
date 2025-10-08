@@ -2,30 +2,10 @@
 
 A Kafka monitoring tool written in Go to provide insights into Kafka cluster performance and behavior.
 
-## TODO
-
-- Add logging
-- Add more error metrics
-
 ## Properties
 
 - **Static Partitions:** Each `Monitor` instance assumes that the set of partitions it finds for a topic at startup is static and will not change throughout its lifetime. The monitor does not currently handle dynamic partition changes.
 - **Message Self-Processing:** Each `Monitor` instance only processes messages that it has created. This is verified by checking the UUID in the message key, which is unique to each `Monitor` instance.
-
-## Getting Started
-
-### Prerequisites
-
-- go (version 1.23 or later)
-- docker compose
-
-## Usage
-
-Build the binary and start collecting metrics via the provided `Makefile` targets.
-
-```sh
-make build
-```
 
 ## Testing
 

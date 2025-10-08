@@ -18,6 +18,7 @@ import (
 
 type partitionMetrics struct {
 	p2b *utils.Stats
+	b2c *utils.Stats
 	e2e *utils.Stats
 }
 
@@ -49,42 +50,31 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 
 // TODO: Cross-cluster measurements should ignore partitions on e2e and not measure b2c
 func NewMonitorFromConfig(cfg *config.KMonConfig, partitions []int32) (*Monitor, error) {
-	producerOpts := []kgo.Opt{
-		kgo.SeedBrokers(cfg.ProducerKafkaConfig.SeedBrokers...),
-		kgo.RecordPartitioner(kgo.ManualPartitioner()),
-	}
+	var producerClient *kgo.Client
+	var consumerClient *kgo.Client
+	var err error
+
 	if cfg.ConsumerKafkaConfig == nil {
-		producerOpts = append(producerOpts, kgo.ConsumeTopics(cfg.ProducerMonitoringTopic))
-	}
-
-	// TODO: Use GetFranzGoClient
-	producerClient, err := kgo.NewClient(producerOpts...)
-	if err != nil {
-		return nil, err
-	}
-
-	consumerClient := producerClient
-	if cfg.ConsumerKafkaConfig != nil {
-		consumerOpts := []kgo.Opt{
-			kgo.SeedBrokers(cfg.ConsumerKafkaConfig.SeedBrokers...),
-			kgo.ConsumeTopics(cfg.ConsumerMonitoringTopic),
+		producerClient, err = clients.GetFranzGoClient(cfg.ProducerKafkaConfig, cfg.ProducerMonitoringTopic)
+		if err != nil {
+			return nil, err
 		}
-
-		// TODO: Use GetFranzGoClient
-		consumerClient, err = kgo.NewClient(consumerOpts...)
+		consumerClient = producerClient
+	} else {
+		producerClient, err = clients.GetFranzGoClient(cfg.ProducerKafkaConfig)
+		if err != nil {
+			return nil, err
+		}
+		consumerClient, err = clients.GetFranzGoClient(cfg.ConsumerKafkaConfig, cfg.ConsumerMonitoringTopic)
 		if err != nil {
 			producerClient.Close()
 			return nil, err
 		}
 	}
 
-	// Generate a unique UUID for this Monitor instance
 	instanceUUID := uuid.NewString()
 
-	sampleFrequency := time.Duration(cfg.SampleFrequencyMs) * time.Millisecond
-	statsWindow := time.Duration(cfg.StatsWindowSeconds) * time.Second
-
-	return NewMonitorWithClients(producerClient, cfg.ProducerMonitoringTopic, consumerClient, instanceUUID, partitions, sampleFrequency, statsWindow), nil
+	return NewMonitorWithClients(producerClient, cfg.ProducerMonitoringTopic, consumerClient, instanceUUID, partitions, time.Duration(cfg.GetSampleFrequencyMs())*time.Millisecond, time.Duration(cfg.GetStatsWindowSeconds())*time.Second), nil
 }
 
 func (m *Monitor) Start(ctx context.Context) {
@@ -93,7 +83,7 @@ func (m *Monitor) Start(ctx context.Context) {
 		defer m.consumerClient.Close()
 	}
 
-	m.Warmup()
+	m.Warmup(ctx)
 
 	go m.consumeLoop(ctx)
 
@@ -110,8 +100,9 @@ func (m *Monitor) Start(ctx context.Context) {
 	}
 }
 
-func (m *Monitor) Warmup() {
-
+func (m *Monitor) Warmup(ctx context.Context) {
+	m.publishProbeBatch(ctx)
+	time.Sleep(3 * time.Second)
 }
 
 func (m *Monitor) publishProbeBatch(ctx context.Context) {
@@ -133,12 +124,13 @@ func (m *Monitor) publishProbe(ctx context.Context, partition int32) {
 
 	m.producerClient.Produce(ctx, record, func(r *kgo.Record, err error) {
 		if err != nil {
-			ProduceFailureCount.WithLabelValues(partitionLabel).Inc()
+			ProduceMessageFailureCount.WithLabelValues(partitionLabel).Inc()
 			return
 		}
 
 		ackLatencyMs := float64(time.Since(sentAt).Milliseconds())
 		m.getPartitionMetrics(partition).recordP2B(partitionLabel, ackLatencyMs)
+		ProduceMessageCount.WithLabelValues(partitionLabel).Inc()
 	})
 }
 
@@ -171,10 +163,9 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record) {
 		return
 	}
 
-	// If the message was produced by this instance, continue processing
 	timestamp, err := strconv.ParseInt(string(record.Value), 10, 64)
 	if err != nil {
-		// If we can't parse the timestamp, ignore it
+		// TODO: Log, metric?
 		return
 	}
 	sentAt := time.Unix(0, timestamp)
@@ -184,7 +175,11 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record) {
 	partitionLabel := m.partitionLabel(partition)
 
 	e2eLatencyMs := float64(consumeTime.Sub(sentAt).Milliseconds())
-	m.getPartitionMetrics(partition).recordE2E(partitionLabel, e2eLatencyMs)
+	b2cLatencyMs := float64(consumeTime.Sub(record.Timestamp).Milliseconds())
+	partitionMetrics := m.getPartitionMetrics(partition)
+	partitionMetrics.recordE2E(partitionLabel, e2eLatencyMs)
+	partitionMetrics.recordB2C(partitionLabel, b2cLatencyMs)
+	ConsumeMessageCount.WithLabelValues(partitionLabel).Inc()
 }
 
 func (m *Monitor) getPartitionMetrics(partition int32) *partitionMetrics {
@@ -198,6 +193,7 @@ func (m *Monitor) partitionLabel(partition int32) string {
 func newPartitionMetrics(window time.Duration) *partitionMetrics {
 	return &partitionMetrics{
 		p2b: utils.NewStats(window),
+		b2c: utils.NewStats(window),
 		e2e: utils.NewStats(window),
 	}
 }
@@ -205,6 +201,11 @@ func newPartitionMetrics(window time.Duration) *partitionMetrics {
 func (pm *partitionMetrics) recordP2B(partitionLabel string, latencyMs float64) {
 	pm.p2b.Add(int64(latencyMs))
 	pm.updateQuantiles(pm.p2b, P2BMessageLatencyQuantile, partitionLabel)
+}
+
+func (pm *partitionMetrics) recordB2C(partitionLabel string, latencyMs float64) {
+	pm.b2c.Add(int64(latencyMs))
+	pm.updateQuantiles(pm.b2c, B2CMessageLatencyQuantile, partitionLabel)
 }
 
 func (pm *partitionMetrics) recordE2E(partitionLabel string, latencyMs float64) {

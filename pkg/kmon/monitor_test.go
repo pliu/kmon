@@ -59,6 +59,7 @@ func TestHandleConsumedRecord(t *testing.T) {
 	// Check if the E2E latency metric has been updated for each partition
 	for _, ps := range m.partitionStats {
 		require.Equal(t, ps.e2e.Len(), 400)
+		require.Equal(t, ps.b2c.Len(), 400)
 	}
 
 	// Print the stats of the handleConsumedRecord function
@@ -85,6 +86,7 @@ func TestHandleConsumedRecord(t *testing.T) {
 
 	for _, ps := range m.partitionStats {
 		require.Equal(t, ps.e2e.Len(), 400)
+		require.Equal(t, ps.b2c.Len(), 400)
 	}
 }
 

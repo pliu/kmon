@@ -8,19 +8,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pliu/kmon/pkg/config"
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
-
-const integrationBroker = "localhost:10000"
 
 func setupTopicManager(t *testing.T, topic string) (*TopicManager, context.Context) {
 	ctx := context.Background()
-	client, err := kgo.NewClient(kgo.SeedBrokers(integrationBroker))
+	cfg := &config.KMonConfig{
+		ProducerMonitoringTopic: topic,
+		ProducerKafkaConfig: &config.KafkaConfig{
+			SeedBrokers: []string{"localhost:10000"},
+		},
+	}
 
+	tm, err := NewTopicManagerFromConfig(cfg)
 	require.NoError(t, err)
-
-	tm := NewTopicManagerWithClients(client, topic, time.Second)
 	tm.changeDetectedCallback = func() {}
 	tm.doneReconcilingCallback = func() {}
 

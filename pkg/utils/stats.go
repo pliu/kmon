@@ -18,12 +18,10 @@ type Stats struct {
 	sum        int64
 }
 
-// NewStats creates a new Stats tracker with a real clock.
 func NewStats(windowSize time.Duration) *Stats {
 	return NewStatsWithClock(windowSize, clock.New())
 }
 
-// NewStatsWithClock creates a new Stats tracker with a custom clock.
 func NewStatsWithClock(windowSize time.Duration, clk clock.Clock) *Stats {
 	return &Stats{
 		values:     NewSortedList(),
@@ -38,7 +36,6 @@ type measurement struct {
 	value     int64
 }
 
-// Add adds a new value measurement.
 func (s *Stats) Add(value int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,7 +47,6 @@ func (s *Stats) Add(value int64) {
 	s.cleanup(now)
 }
 
-// Average returns the average value of the current window.
 func (s *Stats) Average() (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,7 +58,6 @@ func (s *Stats) Average() (float64, bool) {
 	return float64(s.sum) / float64(count), true
 }
 
-// Percentile calculates the latency values at the requested percentiles.
 func (s *Stats) Percentile(percentiles []float64) ([]int64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,14 +88,12 @@ func (s *Stats) Percentile(percentiles []float64) ([]int64, bool) {
 	return results, true
 }
 
-// Len returns the number of items in the tracker.
 func (s *Stats) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.values.Len()
 }
 
-// Values returns the current window's values in ascending order, including duplicates.
 func (s *Stats) Values() []int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,7 +104,6 @@ func (s *Stats) Values() []int64 {
 	return s.values.Keys()
 }
 
-// Merge merges all observations from other into this tracker.
 func (s *Stats) Merge(other *Stats) {
 	if other == nil {
 		return

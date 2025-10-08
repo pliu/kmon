@@ -36,9 +36,9 @@ func TestSet_Add_Contains_Remove_Values(t *testing.T) {
 	// Test Remove
 	s.Remove(2)
 	require.False(t, s.Contains(2)) // Should no longer contain 2
-	require.True(t, s.Contains(1))  // Should still contain 1
-	require.True(t, s.Contains(3))  // Should still contain 3
-	require.False(t, s.Contains(4)) // Should not contain 4
+	require.True(t, s.Contains(1))
+	require.True(t, s.Contains(3))
+	require.False(t, s.Contains(4))
 
 	// Test Values helper after removal
 	slice = s.Items()
