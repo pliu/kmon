@@ -36,8 +36,15 @@ func main() {
 		log.Debug().Msg("Debug logging enabled")
 	}
 
-	fmt.Printf("Using config file: %s\n", *configPath)
-	// TODO: Implement configuration loading from *configPath
+	data, err := os.ReadFile(*configPath)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to read config file")
+	}
+	config, err := config.GetKMonConfigFromBytes(&data)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to parse config file")
+	}
+	fmt.Printf("Using config from %s: %s\n", *configPath, config.String())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal, 1)
@@ -49,7 +56,7 @@ func main() {
 		cancel()
 	}()
 
-	k, err := kmon.NewKMonFromConfig(&config.KMonConfig{}, ctx)
+	k, err := kmon.NewKMonFromConfig(config, ctx)
 	if err != nil {
 		// TODO log inside
 		log.Fatal().Err(err).Msg("failed to create monitor instance")

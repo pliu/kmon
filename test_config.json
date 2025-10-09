@@ -1,0 +1,8 @@
+{
+    "producerKafkaConfig": {
+        "seedBrokers": [
+            "localhost:10000"
+        ]
+    },
+    "producerMonitoringTopic": "real-run"
+}
