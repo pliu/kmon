@@ -82,6 +82,7 @@ func (m *Monitor) Start(ctx context.Context) {
 	if m.consumerClient != m.producerClient {
 		defer m.consumerClient.Close()
 	}
+	log.Info().Msgf("Starting monitor instance %s", m.instanceUUID)
 
 	m.Warmup(ctx)
 
@@ -93,6 +94,7 @@ func (m *Monitor) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info().Msgf("Stopping monitor instance %s", m.instanceUUID)
 			return
 		case <-ticker.C:
 			go m.publishProbeBatch(ctx)
@@ -147,7 +149,7 @@ func (m *Monitor) consumeLoop(ctx context.Context) {
 			}
 
 			fetches.EachError(func(topic string, partition int32, err error) {
-				log.Error().Err(err).Msgf("kafka fetch error on %s[%d]", topic, partition)
+				ConsumeMessageCount.WithLabelValues(m.partitionLabel(partition)).Inc()
 			})
 
 			fetches.EachRecord(func(record *kgo.Record) {

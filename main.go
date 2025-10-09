@@ -36,7 +36,7 @@ func main() {
 		log.Debug().Msg("Debug logging enabled")
 	}
 
-	log.Info().Msgf("Using config file: %s", *configPath)
+	fmt.Printf("Using config file: %s\n", *configPath)
 	// TODO: Implement configuration loading from *configPath
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,12 +49,12 @@ func main() {
 		cancel()
 	}()
 
-	m, err := kmon.NewMonitorFromConfig(&config.KMonConfig{}, []int32{})
+	k, err := kmon.NewKMonFromConfig(&config.KMonConfig{}, ctx)
 	if err != nil {
 		// TODO log inside
 		log.Fatal().Err(err).Msg("failed to create monitor instance")
 	}
-	m.Start(ctx)
+	go k.Start()
 
 	// Setup Prometheus metrics server
 	addr := fmt.Sprintf(":%d", *metricsPort)

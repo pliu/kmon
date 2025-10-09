@@ -5,17 +5,17 @@ import (
 )
 
 type KMonConfig struct {
-	ProducerKafkaConfig             *KafkaConfig `json:"producer_kafka_config" validate:"required"`
-	ConsumerKafkaConfig             *KafkaConfig
-	ProducerMonitoringTopic         string `json:"producer_monitoring_topic" validate:"required,min=1"`
-	ConsumerMonitoringTopic         string
-	SampleFrequencyMs               int
-	StatsWindowSeconds              int
-	TopicReconciliationFrequencyMin int
+	ProducerKafkaConfig             *KafkaConfig `json:"producerKafkaConfig" validate:"required"`
+	ConsumerKafkaConfig             *KafkaConfig `json:"consumerKafkaConfig,omitempty"`
+	ProducerMonitoringTopic         string       `json:"producerMonitoringTopic" validate:"required,min=1"`
+	ConsumerMonitoringTopic         string       `json:"consumerMonitoringTopic,omitempty"`
+	SampleFrequencyMs               int          `json:"sampleFrequencyMs,omitempty"`
+	StatsWindowSeconds              int          `json:"statsWindowSeconds,omitempty"`
+	TopicReconciliationFrequencyMin int          `json:"topicReconciliationFrequencyMin,omitempty"`
 }
 
 type KafkaConfig struct {
-	SeedBrokers []string `json:"seed_brokers" validate:"required,min=1,dive,min=1"`
+	SeedBrokers []string `json:"seedBrokers" validate:"required,min=1,dive,min=1"`
 }
 
 func (cfg *KMonConfig) GetSampleFrequencyMs() int {
@@ -30,6 +30,11 @@ func (cfg *KMonConfig) GetStatsWindowSeconds() int {
 		return cfg.StatsWindowSeconds
 	}
 	return 60
+}
+
+func (cfg *KMonConfig) String() string {
+	data, _ := json.Marshal(cfg)
+	return string(data)
 }
 
 func (cfg *KMonConfig) GetTopicReconciliationFrequencyMin() int {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/phuslu/log"
 	"github.com/pliu/kmon/pkg/clients"
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/pliu/kmon/pkg/utils"
@@ -16,7 +17,6 @@ import (
 )
 
 // TODO: Figure out how topic manager manages topics across clusters for cross-cluster measurement
-// TODO: Figure out how to get partition list out of this object back up to the kmon object
 type TopicManager struct {
 	client                  *kgo.Client
 	admClient               *kadm.Client
@@ -24,7 +24,7 @@ type TopicManager struct {
 	reconciliationInterval  time.Duration
 	previousBrokerSet       *utils.Set[int32]
 	changeDetectedCallback  func()
-	doneReconcilingCallback func()
+	doneReconcilingCallback func(int)
 }
 
 func NewTopicManagerFromConfig(cfg *config.KMonConfig) (*TopicManager, error) {
@@ -48,16 +48,22 @@ func (tm *TopicManager) Start(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
+		if err := tm.maybeReconcileTopic(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to reconcile topic")
+			time.Sleep(5 * time.Second)
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = tm.maybeReconcileTopic(ctx)
 		}
 	}
 }
 
 func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
+	log.Info().Msg("Checking whether to reconcile topic")
+
 	partitions, err := tm.getTopicPartitions(ctx)
 	if err != nil {
 		return err
@@ -70,19 +76,20 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 
 	if partitions == nil {
 		tm.changeDetectedCallback()
-		for err = tm.createTopic(ctx, brokerIDs); err != nil; {
-			time.Sleep(1 * time.Second)
-			err = tm.createTopic(ctx, brokerIDs)
+		if err = tm.createTopic(ctx, brokerIDs); err != nil {
+			return err
 		}
 		tm.waitUntilTopicExists((ctx))
-		tm.doneReconcilingCallback()
+		tm.doneReconcilingCallback(brokerIDs.Len())
 		return nil
 	}
 
 	if len(partitions) != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
 		tm.changeDetectedCallback()
-		_ = tm.reconcileTopic(ctx, brokerIDs)
-		tm.doneReconcilingCallback()
+		if err = tm.reconcileTopic(ctx, brokerIDs); err != nil {
+			return err
+		}
+		tm.doneReconcilingCallback(brokerIDs.Len())
 	}
 
 	return nil
@@ -98,11 +105,8 @@ func (tm *TopicManager) getTopicPartitions(ctx context.Context) ([]int32, error)
 		if td.Err == nil {
 			return td.Partitions.Numbers(), nil
 		}
-		var kafkaErr *kerr.Error
-		if errors.As(td.Err, &kafkaErr) {
-			if kafkaErr == kerr.UnknownTopicOrPartition {
-				return nil, nil
-			}
+		if errors.Is(td.Err, kerr.UnknownTopicOrPartition) {
+			return nil, nil
 		}
 		return nil, td.Err
 	}
@@ -111,6 +115,8 @@ func (tm *TopicManager) getTopicPartitions(ctx context.Context) ([]int32, error)
 }
 
 func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
+	log.Info().Msg("Creating topic")
+
 	createTopicsRequest := kmsg.NewCreateTopicsRequest()
 	topic := kmsg.NewCreateTopicsRequestTopic()
 	topic.Topic = tm.topicName
@@ -121,13 +127,14 @@ func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *utils.Set[in
 	createTopicsRequest.Topics = append(createTopicsRequest.Topics, topic)
 
 	resp, err := createTopicsRequest.RequestWith(ctx, tm.client)
-	if err != nil {
+	if err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
 		return err
 	}
-	for _, tr := range resp.Topics {
-		if tr.ErrorCode != 0 {
-			return fmt.Errorf("%s", *tr.ErrorMessage)
-		}
+	if len(resp.Topics) != 1 {
+		return fmt.Errorf("unexpected number of topics in response: %d", len(resp.Topics))
+	}
+	if resp.Topics[0].ErrorCode != 0 && resp.Topics[0].ErrorCode != kerr.TopicAlreadyExists.Code {
+		return fmt.Errorf("failed to create topic: %s", *resp.Topics[0].ErrorMessage)
 	}
 
 	tm.previousBrokerSet = brokerIDs
@@ -167,6 +174,7 @@ func (tm *TopicManager) generatePartitionAssignment(brokerIDs *utils.Set[int32])
 
 // This waits for 5 successes as each ListTopics is a metadata call to a random broker.
 // Writes (e.g., create, delete) go through the coordinator but take time to propogate to other brokers, resulting in eventual consistency.
+// TODO: Add timeout
 func (tm *TopicManager) waitUntilTopicExists(ctx context.Context) {
 	for i := 0; i < 5; {
 		topics, err := tm.admClient.ListTopics(ctx, tm.topicName)
@@ -180,6 +188,7 @@ func (tm *TopicManager) waitUntilTopicExists(ctx context.Context) {
 	}
 }
 
+// TODO: Add timeout
 func (tm *TopicManager) waitUntilTopicNoLongerExists(ctx context.Context) {
 	for i := 0; i < 5; {
 		topics, err := tm.admClient.ListTopics(ctx)
@@ -194,14 +203,14 @@ func (tm *TopicManager) waitUntilTopicNoLongerExists(ctx context.Context) {
 }
 
 func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
-	_, err := tm.admClient.DeleteTopic(ctx, tm.topicName)
-	if err != nil {
+	log.Info().Msg("Reconciling topic")
+
+	if _, err := tm.admClient.DeleteTopic(ctx, tm.topicName); err != nil {
 		return err
 	}
 	tm.waitUntilTopicNoLongerExists(ctx)
-	for err = tm.createTopic(ctx, brokerIDs); err != nil; {
-		time.Sleep(1 * time.Second)
-		err = tm.createTopic(ctx, brokerIDs)
+	if err := tm.createTopic(ctx, brokerIDs); err != nil {
+		return err
 	}
 	tm.waitUntilTopicExists(ctx)
 	return nil

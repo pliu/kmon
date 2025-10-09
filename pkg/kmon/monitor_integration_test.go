@@ -4,7 +4,6 @@ package kmon
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -16,7 +15,7 @@ import (
 
 func TestMonitorIntegration(t *testing.T) {
 	seedBrokers := []string{"localhost:10000"}
-	topic := fmt.Sprintf("test-topic-%d", time.Now().UnixNano())
+	topic := "kmon-monitor"
 
 	client, err := kgo.NewClient(kgo.SeedBrokers(seedBrokers...))
 	require.NoError(t, err)

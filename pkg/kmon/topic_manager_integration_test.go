@@ -4,9 +4,7 @@ package kmon
 
 import (
 	"context"
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/pliu/kmon/pkg/config"
 	"github.com/stretchr/testify/require"
@@ -24,7 +22,7 @@ func setupTopicManager(t *testing.T, topic string) (*TopicManager, context.Conte
 	tm, err := NewTopicManagerFromConfig(cfg)
 	require.NoError(t, err)
 	tm.changeDetectedCallback = func() {}
-	tm.doneReconcilingCallback = func() {}
+	tm.doneReconcilingCallback = func(i int) {}
 
 	t.Cleanup(func() {
 		_, _ = tm.admClient.DeleteTopics(ctx, topic)
@@ -35,7 +33,7 @@ func setupTopicManager(t *testing.T, topic string) (*TopicManager, context.Conte
 }
 
 func TestTopicManagerMaybeReconcileTopicNoTopic(t *testing.T) {
-	topic := fmt.Sprintf("kmon-create-topic-%d", time.Now().UnixNano())
+	topic := "kmon-create"
 	tm, ctx := setupTopicManager(t, topic)
 
 	_, _ = tm.admClient.DeleteTopics(ctx, topic)
@@ -49,7 +47,7 @@ func TestTopicManagerMaybeReconcileTopicNoTopic(t *testing.T) {
 }
 
 func TestTopicManagerMaybeReconcileTopicIncorrectTopic(t *testing.T) {
-	topic := fmt.Sprintf("kmon-incorrect-topic-%d", time.Now().UnixNano())
+	topic := "kmon-incorrect"
 	tm, ctx := setupTopicManager(t, topic)
 
 	_, _ = tm.admClient.DeleteTopics(ctx, topic)

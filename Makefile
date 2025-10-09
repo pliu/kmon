@@ -1,6 +1,6 @@
 GO_CMD = go
 GO_BUILD_FLAGS = -v
-GO_TEST_FLAGS = -v -count=1
+GO_TEST_FLAGS = -v -count=1 -cover
 
 .PHONY: all build run unit_tests test_all clean fmt lint
 

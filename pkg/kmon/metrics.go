@@ -48,4 +48,11 @@ var (
 		},
 		[]string{"partition"},
 	)
+	ConsumeMessageFailureCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kmon_consume_message_failure_count",
+			Help: "Total number of consume message failures",
+		},
+		[]string{"partition"},
+	)
 )
