@@ -3,8 +3,8 @@ package kmon
 import (
 	"context"
 	"fmt"
-
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +30,8 @@ type Monitor struct {
 	partitions      []int32
 	partitionStats  map[int32]*partitionMetrics
 	sampleFrequency time.Duration
+	recordsChan     chan *kgo.Record
+	wg              sync.WaitGroup
 }
 
 func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions []int32, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
@@ -40,6 +42,7 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 		instanceUUID:    instanceUUID,
 		partitions:      partitions,
 		sampleFrequency: sampleFrequency,
+		recordsChan:     make(chan *kgo.Record, 1000),
 	}
 	m.partitionStats = make(map[int32]*partitionMetrics)
 	for _, p := range m.partitions {
@@ -84,6 +87,12 @@ func (m *Monitor) Start(ctx context.Context) {
 	}
 	log.Info().Msgf("Starting monitor instance %s", m.instanceUUID)
 
+	// Start worker pool
+	for i := 0; i < len(m.partitions); i++ {
+		m.wg.Add(1)
+		go m.worker()
+	}
+
 	m.Warmup(ctx)
 
 	go m.consumeLoop(ctx)
@@ -95,10 +104,19 @@ func (m *Monitor) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Info().Msgf("Stopping monitor instance %s", m.instanceUUID)
+			close(m.recordsChan)
+			m.wg.Wait()
 			return
 		case <-ticker.C:
-			go m.publishProbeBatch(ctx)
+			m.publishProbeBatch(ctx)
 		}
+	}
+}
+
+func (m *Monitor) worker() {
+	defer m.wg.Done()
+	for record := range m.recordsChan {
+		m.handleConsumedRecord(record)
 	}
 }
 
@@ -153,7 +171,7 @@ func (m *Monitor) consumeLoop(ctx context.Context) {
 			})
 
 			fetches.EachRecord(func(record *kgo.Record) {
-				go m.handleConsumedRecord(record)
+				m.recordsChan <- record
 			})
 		}
 	}

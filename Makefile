@@ -24,6 +24,11 @@ fmt:
 lint: fmt
 	golangci-lint run
 
+run: build
+	./build/kmon -config.path test_config.json
+
+test_all:
+
 start_kafka:
 	docker compose -f docker-compose.yml up -d
 
