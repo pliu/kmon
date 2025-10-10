@@ -50,6 +50,7 @@ func (s *Stats) Add(value int64) {
 func (s *Stats) Average() (float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cleanup(s.clock.Now())
 
 	count := s.values.Len()
 	if count == 0 {
@@ -61,7 +62,7 @@ func (s *Stats) Average() (float64, bool) {
 func (s *Stats) Percentile(percentiles []float64) ([]int64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
+	s.cleanup(s.clock.Now())
 	if len(percentiles) == 0 {
 		return nil, false
 	}
@@ -91,12 +92,14 @@ func (s *Stats) Percentile(percentiles []float64) ([]int64, bool) {
 func (s *Stats) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cleanup(s.clock.Now())
 	return s.values.Len()
 }
 
 func (s *Stats) Values() []int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cleanup(s.clock.Now())
 
 	if s.values == nil || s.values.Len() == 0 {
 		return []int64{}

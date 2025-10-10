@@ -21,8 +21,8 @@ func TestMonitorIntegration(t *testing.T) {
 	require.NoError(t, err)
 	adminClient := kadm.NewClient(client)
 	defer adminClient.Close()
-	partitions := []int32{0, 1, 2}
-	_, err = adminClient.CreateTopics(context.Background(), int32(len(partitions)), 3, nil, topic)
+	partitions := 3
+	_, err = adminClient.CreateTopics(context.Background(), int32(partitions), 3, nil, topic)
 	require.NoError(t, err)
 	defer adminClient.DeleteTopics(context.Background(), topic)
 
@@ -47,19 +47,18 @@ func TestMonitorIntegration(t *testing.T) {
 	// Wait for some probes to be sent and consumed
 	time.Sleep(14 * time.Second)
 
-	require.NotEmpty(t, m.partitionStats)
-	for p, ps := range m.partitionStats {
-		require.Greater(t, ps.e2e.Len(), 0)
-		require.Greater(t, ps.p2b.Len(), 0)
-		require.Greater(t, ps.b2c.Len(), 0)
+	for partition := range m.partitions {
+		require.Greater(t, m.e2eStats[partition].Len(), 0)
+		require.Greater(t, m.b2cStats[partition].Len(), 0)
+		require.Greater(t, m.p2bStats[partition].Len(), 0)
 
-		avg, ok := ps.e2e.Average()
+		avg, ok := m.e2eStats[partition].Average()
 		require.True(t, ok)
-		percentiles, ok := ps.e2e.Percentile([]float64{50, 99})
+		percentiles, ok := m.e2eStats[partition].Percentile([]float64{50, 99})
 		require.True(t, ok)
-		t.Logf("Data points [%d]: %d", p, ps.e2e.Len())
-		t.Logf("Average latency [%d]: %.2fms", p, avg)
-		t.Logf("Median latency [%d]: %dms", p, percentiles[0])
-		t.Logf("p99 latency [%d]: %dms", p, percentiles[1])
+		t.Logf("Data points [%d]: %d", partition, m.e2eStats[partition].Len())
+		t.Logf("Average latency [%d]: %.2fms", partition, avg)
+		t.Logf("Median latency [%d]: %dms", partition, percentiles[0])
+		t.Logf("p99 latency [%d]: %dms", partition, percentiles[1])
 	}
 }
