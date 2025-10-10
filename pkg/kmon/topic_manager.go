@@ -55,6 +55,7 @@ func (tm *TopicManager) Start(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
+			log.Info().Msg("Stopping TopicManager instance")
 			return
 		case <-ticker.C:
 		}
@@ -64,7 +65,7 @@ func (tm *TopicManager) Start(ctx context.Context) {
 func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 	log.Info().Msg("Checking whether to reconcile topic")
 
-	partitions, err := tm.getTopicPartitions(ctx)
+	numPartitions, err := tm.getTopicNumPartitions(ctx)
 	if err != nil {
 		return err
 	}
@@ -74,7 +75,7 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 		return err
 	}
 
-	if partitions == nil {
+	if numPartitions == 0 {
 		tm.changeDetectedCallback()
 		if err = tm.createTopic(ctx, brokerIDs); err != nil {
 			return err
@@ -84,7 +85,7 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 		return nil
 	}
 
-	if len(partitions) != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
+	if numPartitions != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
 		tm.changeDetectedCallback()
 		if err = tm.reconcileTopic(ctx, brokerIDs); err != nil {
 			return err
@@ -95,23 +96,23 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 	return nil
 }
 
-func (tm *TopicManager) getTopicPartitions(ctx context.Context) ([]int32, error) {
+func (tm *TopicManager) getTopicNumPartitions(ctx context.Context) (int, error) {
 	topicDetails, err := tm.admClient.ListTopics(ctx, tm.topicName)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	if td, exists := topicDetails[tm.topicName]; exists {
 		if td.Err == nil {
-			return td.Partitions.Numbers(), nil
+			return len(td.Partitions.Numbers()), nil
 		}
 		if errors.Is(td.Err, kerr.UnknownTopicOrPartition) {
-			return nil, nil
+			return 0, nil
 		}
-		return nil, td.Err
+		return 0, td.Err
 	}
 
-	return nil, nil
+	return 0, nil
 }
 
 func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
@@ -163,10 +164,10 @@ func (tm *TopicManager) generateTopicConfigs() []kmsg.CreateTopicsRequestTopicCo
 // TODO: Use more replicas for cross-cluster testing?
 func (tm *TopicManager) generatePartitionAssignment(brokerIDs *utils.Set[int32]) []kmsg.CreateTopicsRequestTopicReplicaAssignment {
 	replicaAssignments := []kmsg.CreateTopicsRequestTopicReplicaAssignment{}
-	for i, brokerIDs := range brokerIDs.Items() {
+	for i, brokerID := range brokerIDs.Items() {
 		replicaAssignment := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
 		replicaAssignment.Partition = int32(i)
-		replicaAssignment.Replicas = []int32{brokerIDs}
+		replicaAssignment.Replicas = []int32{brokerID}
 		replicaAssignments = append(replicaAssignments, replicaAssignment)
 	}
 	return replicaAssignments

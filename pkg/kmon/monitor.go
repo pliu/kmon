@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,25 +15,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-type partitionMetrics struct {
-	p2b *utils.Stats
-	b2c *utils.Stats
-	e2e *utils.Stats
-}
-
 type Monitor struct {
 	producerClient  clients.KgoClient
 	producerTopic   string
 	consumerClient  clients.KgoClient
 	instanceUUID    string
-	partitions      []int32
-	partitionStats  map[int32]*partitionMetrics
+	partitions      int
+	p2bStats        map[int]*utils.Stats
+	b2cStats        map[int]*utils.Stats
+	e2eStats        map[int]*utils.Stats
 	sampleFrequency time.Duration
-	recordsChan     chan *kgo.Record
-	wg              sync.WaitGroup
 }
 
-func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions []int32, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
+func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions int, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
 	m := &Monitor{
 		producerClient:  producerClient,
 		producerTopic:   producerTopic,
@@ -42,17 +35,20 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 		instanceUUID:    instanceUUID,
 		partitions:      partitions,
 		sampleFrequency: sampleFrequency,
-		recordsChan:     make(chan *kgo.Record, 1000),
 	}
-	m.partitionStats = make(map[int32]*partitionMetrics)
-	for _, p := range m.partitions {
-		m.partitionStats[p] = newPartitionMetrics(statsWindow)
+	m.p2bStats = make(map[int]*utils.Stats)
+	m.b2cStats = make(map[int]*utils.Stats)
+	m.e2eStats = make(map[int]*utils.Stats)
+	for p := range m.partitions {
+		m.p2bStats[p] = utils.NewStats(statsWindow)
+		m.b2cStats[p] = utils.NewStats(statsWindow)
+		m.e2eStats[p] = utils.NewStats(statsWindow)
 	}
 	return m
 }
 
 // TODO: Cross-cluster measurements should ignore partitions on e2e and not measure b2c
-func NewMonitorFromConfig(cfg *config.KMonConfig, partitions []int32) (*Monitor, error) {
+func NewMonitorFromConfig(cfg *config.KMonConfig, partitions int) (*Monitor, error) {
 	var producerClient *kgo.Client
 	var consumerClient *kgo.Client
 	var err error
@@ -87,15 +83,10 @@ func (m *Monitor) Start(ctx context.Context) {
 	}
 	log.Info().Msgf("Starting monitor instance %s", m.instanceUUID)
 
-	// Start worker pool
-	for i := 0; i < len(m.partitions); i++ {
-		m.wg.Add(1)
-		go m.worker()
-	}
-
-	m.Warmup(ctx)
+	m.warmup(ctx)
 
 	go m.consumeLoop(ctx)
+	go m.updateQuantilesLoop(ctx)
 
 	ticker := time.NewTicker(m.sampleFrequency)
 	defer ticker.Stop()
@@ -104,8 +95,6 @@ func (m *Monitor) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Info().Msgf("Stopping monitor instance %s", m.instanceUUID)
-			close(m.recordsChan)
-			m.wg.Wait()
 			return
 		case <-ticker.C:
 			m.publishProbeBatch(ctx)
@@ -113,29 +102,22 @@ func (m *Monitor) Start(ctx context.Context) {
 	}
 }
 
-func (m *Monitor) worker() {
-	defer m.wg.Done()
-	for record := range m.recordsChan {
-		m.handleConsumedRecord(record)
-	}
-}
-
-func (m *Monitor) Warmup(ctx context.Context) {
+func (m *Monitor) warmup(ctx context.Context) {
 	m.publishProbeBatch(ctx)
 	time.Sleep(3 * time.Second)
 }
 
 func (m *Monitor) publishProbeBatch(ctx context.Context) {
-	for _, partition := range m.partitions {
+	for partition := range m.partitions {
 		m.publishProbe(ctx, partition)
 	}
 }
 
-func (m *Monitor) publishProbe(ctx context.Context, partition int32) {
+func (m *Monitor) publishProbe(ctx context.Context, partition int) {
 	sentAt := time.Now()
 	record := &kgo.Record{
 		Topic:     m.producerTopic,
-		Partition: partition,
+		Partition: int32(partition),
 		Key:       []byte(m.instanceUUID),
 		Value:     fmt.Appendf(nil, "%d", sentAt.UnixNano()),
 	}
@@ -148,8 +130,8 @@ func (m *Monitor) publishProbe(ctx context.Context, partition int32) {
 			return
 		}
 
-		ackLatencyMs := float64(time.Since(sentAt).Milliseconds())
-		m.getPartitionMetrics(partition).recordP2B(partitionLabel, ackLatencyMs)
+		ackLatencyMs := time.Since(sentAt).Milliseconds()
+		m.p2bStats[partition].Add(int64(ackLatencyMs))
 		ProduceMessageCount.WithLabelValues(partitionLabel).Inc()
 	})
 }
@@ -167,17 +149,18 @@ func (m *Monitor) consumeLoop(ctx context.Context) {
 			}
 
 			fetches.EachError(func(topic string, partition int32, err error) {
-				ConsumeMessageCount.WithLabelValues(m.partitionLabel(partition)).Inc()
+				ConsumeMessageCount.WithLabelValues(m.partitionLabel(int(partition))).Inc()
 			})
 
+			now := time.Now()
 			fetches.EachRecord(func(record *kgo.Record) {
-				m.recordsChan <- record
+				m.handleConsumedRecord(record, now)
 			})
 		}
 	}
 }
 
-func (m *Monitor) handleConsumedRecord(record *kgo.Record) {
+func (m *Monitor) handleConsumedRecord(record *kgo.Record, consumeTime time.Time) {
 	// Only process messages that were generated by this instance
 	if string(record.Key) != m.instanceUUID {
 		return
@@ -190,50 +173,41 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record) {
 	}
 	sentAt := time.Unix(0, timestamp)
 
-	consumeTime := time.Now()
-	partition := record.Partition
+	partition := int(record.Partition)
 	partitionLabel := m.partitionLabel(partition)
 
-	e2eLatencyMs := float64(consumeTime.Sub(sentAt).Milliseconds())
-	b2cLatencyMs := float64(consumeTime.Sub(record.Timestamp).Milliseconds())
-	partitionMetrics := m.getPartitionMetrics(partition)
-	partitionMetrics.recordE2E(partitionLabel, e2eLatencyMs)
-	partitionMetrics.recordB2C(partitionLabel, b2cLatencyMs)
+	e2eLatencyMs := consumeTime.Sub(sentAt).Milliseconds()
+	b2cLatencyMs := consumeTime.Sub(record.Timestamp).Milliseconds()
+
+	m.b2cStats[partition].Add(b2cLatencyMs)
+	m.e2eStats[partition].Add(e2eLatencyMs)
 	ConsumeMessageCount.WithLabelValues(partitionLabel).Inc()
 }
 
-func (m *Monitor) getPartitionMetrics(partition int32) *partitionMetrics {
-	return m.partitionStats[partition]
-}
-
-func (m *Monitor) partitionLabel(partition int32) string {
+func (m *Monitor) partitionLabel(partition int) string {
 	return fmt.Sprintf("%d", partition)
 }
 
-func newPartitionMetrics(window time.Duration) *partitionMetrics {
-	return &partitionMetrics{
-		p2b: utils.NewStats(window),
-		b2c: utils.NewStats(window),
-		e2e: utils.NewStats(window),
+func (m *Monitor) updateQuantilesLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for partition := range m.partitions {
+				partitionLabel := m.partitionLabel(partition)
+				m.updateQuantiles(m.e2eStats[partition], E2EMessageLatencyQuantile, partitionLabel)
+				m.updateQuantiles(m.p2bStats[partition], P2BMessageLatencyQuantile, partitionLabel)
+				m.updateQuantiles(m.b2cStats[partition], B2CMessageLatencyQuantile, partitionLabel)
+			}
+		}
 	}
 }
 
-func (pm *partitionMetrics) recordP2B(partitionLabel string, latencyMs float64) {
-	pm.p2b.Add(int64(latencyMs))
-	pm.updateQuantiles(pm.p2b, P2BMessageLatencyQuantile, partitionLabel)
-}
-
-func (pm *partitionMetrics) recordB2C(partitionLabel string, latencyMs float64) {
-	pm.b2c.Add(int64(latencyMs))
-	pm.updateQuantiles(pm.b2c, B2CMessageLatencyQuantile, partitionLabel)
-}
-
-func (pm *partitionMetrics) recordE2E(partitionLabel string, latencyMs float64) {
-	pm.e2e.Add(int64(latencyMs))
-	pm.updateQuantiles(pm.e2e, E2EMessageLatencyQuantile, partitionLabel)
-}
-
-func (pm *partitionMetrics) updateQuantiles(stats *utils.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
+func (m *Monitor) updateQuantiles(stats *utils.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
 	res, ok := stats.Percentile([]float64{50, 95, 99})
 	if !ok {
 		return

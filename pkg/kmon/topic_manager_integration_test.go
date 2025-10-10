@@ -41,9 +41,9 @@ func TestTopicManagerMaybeReconcileTopicNoTopic(t *testing.T) {
 
 	require.NoError(t, tm.maybeReconcileTopic(ctx))
 
-	partitions, err := tm.getTopicPartitions(ctx)
+	numPartitions, err := tm.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(partitions))
+	require.Equal(t, 3, numPartitions)
 }
 
 func TestTopicManagerMaybeReconcileTopicIncorrectTopic(t *testing.T) {
@@ -57,12 +57,12 @@ func TestTopicManagerMaybeReconcileTopicIncorrectTopic(t *testing.T) {
 	require.NoError(t, err)
 	tm.waitUntilTopicExists(ctx)
 
-	partitions, err := tm.getTopicPartitions(ctx)
+	numPartitions, err := tm.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, len(partitions))
+	require.Equal(t, 1, numPartitions)
 
 	require.NoError(t, tm.maybeReconcileTopic(ctx))
-	partitions, err = tm.getTopicPartitions(ctx)
+	numPartitions, err = tm.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(partitions))
+	require.Equal(t, 3, numPartitions)
 }

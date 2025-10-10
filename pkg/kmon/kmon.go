@@ -42,11 +42,7 @@ func (k *KMon) changeDetectedCallback() {
 }
 
 func (k *KMon) doneReconcilingCallback(numPartitions int) {
-	var partitions []int32
-	for i := range numPartitions {
-		partitions = append(partitions, int32(i))
-	}
-	monitor, err := NewMonitorFromConfig(k.cfg, partitions)
+	monitor, err := NewMonitorFromConfig(k.cfg, numPartitions)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create monitor instance")
 	}

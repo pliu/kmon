@@ -41,17 +41,16 @@ func TestKMonIntegration(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	first_uuid := kmon.monitor.instanceUUID
-	partitions, err := kmon.topicManager.getTopicPartitions(ctx)
+	numPartitions, err := kmon.topicManager.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(partitions))
+	require.Equal(t, 3, numPartitions)
 
 	time.Sleep(15 * time.Second)
 
-	require.NotEmpty(t, kmon.monitor.partitionStats)
-	for _, ps := range kmon.monitor.partitionStats {
-		require.Greater(t, ps.e2e.Len(), 0)
-		require.Greater(t, ps.p2b.Len(), 0)
-		require.Greater(t, ps.b2c.Len(), 0)
+	for partition := range kmon.monitor.partitions {
+		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
 	}
 
 	_, _ = kmon.topicManager.admClient.DeleteTopics(ctx, topic)
@@ -60,9 +59,9 @@ func TestKMonIntegration(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	second_uuid := kmon.monitor.instanceUUID
 	require.NotEqual(t, first_uuid, second_uuid)
-	partitions, err = kmon.topicManager.getTopicPartitions(ctx)
+	numPartitions, err = kmon.topicManager.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(partitions))
+	require.Equal(t, 3, numPartitions)
 
 	minInsyncReplicas := "1"
 	topicConfigs := map[string]*string{
@@ -74,21 +73,20 @@ func TestKMonIntegration(t *testing.T) {
 	_, _ = kmon.topicManager.admClient.CreateTopics(ctx, 4, 1, topicConfigs, topic)
 	defer kmon.topicManager.admClient.DeleteTopics(ctx, topic)
 	kmon.topicManager.waitUntilTopicExists(ctx)
-	partitions, err = kmon.topicManager.getTopicPartitions(ctx)
+	numPartitions, err = kmon.topicManager.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(partitions))
+	require.Equal(t, 4, numPartitions)
 
 	time.Sleep(25 * time.Second)
 
 	third_uuid := kmon.monitor.instanceUUID
 	require.NotEqual(t, second_uuid, third_uuid)
-	partitions, err = kmon.topicManager.getTopicPartitions(ctx)
+	numPartitions, err = kmon.topicManager.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(partitions))
-	require.NotEmpty(t, kmon.monitor.partitionStats)
-	for _, ps := range kmon.monitor.partitionStats {
-		require.Greater(t, ps.e2e.Len(), 0)
-		require.Greater(t, ps.p2b.Len(), 0)
-		require.Greater(t, ps.b2c.Len(), 0)
+	require.Equal(t, 3, numPartitions)
+	for partition := range kmon.monitor.partitions {
+		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
 	}
 }
