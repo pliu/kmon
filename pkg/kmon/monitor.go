@@ -16,15 +16,16 @@ import (
 )
 
 type Monitor struct {
-	producerClient  clients.KgoClient
-	producerTopic   string
-	consumerClient  clients.KgoClient
-	instanceUUID    string
-	partitions      int
-	p2bStats        map[int]*utils.Stats
-	b2cStats        map[int]*utils.Stats
-	e2eStats        map[int]*utils.Stats
-	sampleFrequency time.Duration
+	producerClient   clients.KgoClient
+	producerTopic    string
+	consumerClient   clients.KgoClient
+	instanceUUID     string
+	partitions       int
+	p2bStats         map[int]*utils.Stats
+	b2cStats         map[int]*utils.Stats
+	e2eStats         map[int]*utils.Stats
+	producerAckStats map[int]*utils.Stats
+	sampleFrequency  time.Duration
 }
 
 func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions int, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
@@ -39,10 +40,12 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 	m.p2bStats = make(map[int]*utils.Stats)
 	m.b2cStats = make(map[int]*utils.Stats)
 	m.e2eStats = make(map[int]*utils.Stats)
+	m.producerAckStats = make(map[int]*utils.Stats)
 	for p := range m.partitions {
 		m.p2bStats[p] = utils.NewStats(statsWindow)
 		m.b2cStats[p] = utils.NewStats(statsWindow)
 		m.e2eStats[p] = utils.NewStats(statsWindow)
+		m.producerAckStats[p] = utils.NewStats(statsWindow)
 	}
 	return m
 }
@@ -130,8 +133,7 @@ func (m *Monitor) publishProbe(ctx context.Context, partition int) {
 			return
 		}
 
-		ackLatencyMs := time.Since(sentAt).Milliseconds()
-		m.p2bStats[partition].Add(int64(ackLatencyMs))
+		m.producerAckStats[partition].Add(time.Since(sentAt).Milliseconds())
 		ProduceMessageCount.WithLabelValues(partitionLabel).Inc()
 	})
 }
@@ -176,11 +178,10 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record, consumeTime time.Time
 	partition := int(record.Partition)
 	partitionLabel := m.partitionLabel(partition)
 
-	e2eLatencyMs := consumeTime.Sub(sentAt).Milliseconds()
-	b2cLatencyMs := consumeTime.Sub(record.Timestamp).Milliseconds()
+	m.b2cStats[partition].Add(consumeTime.Sub(record.Timestamp).Milliseconds())
+	m.e2eStats[partition].Add(consumeTime.Sub(sentAt).Milliseconds())
+	m.p2bStats[partition].Add(record.Timestamp.Sub(sentAt).Milliseconds())
 
-	m.b2cStats[partition].Add(b2cLatencyMs)
-	m.e2eStats[partition].Add(e2eLatencyMs)
 	ConsumeMessageCount.WithLabelValues(partitionLabel).Inc()
 }
 
@@ -202,6 +203,7 @@ func (m *Monitor) updateQuantilesLoop(ctx context.Context) {
 				m.updateQuantiles(m.e2eStats[partition], E2EMessageLatencyQuantile, partitionLabel)
 				m.updateQuantiles(m.p2bStats[partition], P2BMessageLatencyQuantile, partitionLabel)
 				m.updateQuantiles(m.b2cStats[partition], B2CMessageLatencyQuantile, partitionLabel)
+				m.updateQuantiles(m.producerAckStats[partition], ProducerAckLatencyQuantile, partitionLabel)
 			}
 		}
 	}

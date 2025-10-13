@@ -51,6 +51,7 @@ func TestKMonIntegration(t *testing.T) {
 		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.producerAckStats[partition].Len(), 0)
 	}
 
 	_, _ = kmon.topicManager.admClient.DeleteTopics(ctx, topic)
@@ -88,5 +89,6 @@ func TestKMonIntegration(t *testing.T) {
 		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
+		require.Greater(t, kmon.monitor.producerAckStats[partition].Len(), 0)
 	}
 }

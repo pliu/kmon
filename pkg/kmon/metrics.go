@@ -16,7 +16,7 @@ var (
 	P2BMessageLatencyQuantile = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "kmon_p2b_message_latency_quantile",
-			Help: "Quantile of producer-to-broker message ack latency in milliseconds",
+			Help: "Quantile of producer-to-broker message delivery latency in milliseconds",
 		},
 		[]string{"partition", "quantile"},
 	)
@@ -24,6 +24,13 @@ var (
 		prometheus.GaugeOpts{
 			Name: "kmon_b2c_message_latency_quantile",
 			Help: "Quantile of broker-to-consumer message delivery latency in milliseconds",
+		},
+		[]string{"partition", "quantile"},
+	)
+	ProducerAckLatencyQuantile = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kmon_producer_ack_quantile",
+			Help: "Quantile of producer ack latency in milliseconds",
 		},
 		[]string{"partition", "quantile"},
 	)

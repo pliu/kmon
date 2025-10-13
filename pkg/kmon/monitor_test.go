@@ -60,6 +60,7 @@ func TestHandleConsumedRecord(t *testing.T) {
 	for partition := range m.partitions {
 		require.Equal(t, m.e2eStats[partition].Len(), 400)
 		require.Equal(t, m.b2cStats[partition].Len(), 400)
+		require.Equal(t, m.p2bStats[partition].Len(), 400)
 	}
 
 	// Print the stats of the handleConsumedRecord function
@@ -88,6 +89,7 @@ func TestHandleConsumedRecord(t *testing.T) {
 	for partition := range m.partitions {
 		require.Equal(t, m.e2eStats[partition].Len(), 400)
 		require.Equal(t, m.b2cStats[partition].Len(), 400)
+		require.Equal(t, m.p2bStats[partition].Len(), 400)
 	}
 }
 
@@ -132,6 +134,6 @@ func TestPublishProbeBatch(t *testing.T) {
 	// Ensure all partitions were covered
 	for p := range partitions {
 		require.True(t, expectedPartitions[p], "Partition %d should have been probed", p)
-		require.Equal(t, 1, m.p2bStats[p].Len())
+		require.Equal(t, 1, m.producerAckStats[p].Len())
 	}
 }

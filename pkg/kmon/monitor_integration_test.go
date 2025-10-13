@@ -51,6 +51,7 @@ func TestMonitorIntegration(t *testing.T) {
 		require.Greater(t, m.e2eStats[partition].Len(), 0)
 		require.Greater(t, m.b2cStats[partition].Len(), 0)
 		require.Greater(t, m.p2bStats[partition].Len(), 0)
+		require.Greater(t, m.producerAckStats[partition].Len(), 0)
 
 		avg, ok := m.e2eStats[partition].Average()
 		require.True(t, ok)
