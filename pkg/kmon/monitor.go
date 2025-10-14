@@ -26,9 +26,10 @@ type Monitor struct {
 	e2eStats         map[int]*utils.Stats
 	producerAckStats map[int]*utils.Stats
 	sampleFrequency  time.Duration
+	isMirror         bool
 }
 
-func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions int, sampleFrequency time.Duration, statsWindow time.Duration) *Monitor {
+func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic string, consumerClient clients.KgoClient, instanceUUID string, partitions int, sampleFrequency time.Duration, statsWindow time.Duration, isMirror bool) *Monitor {
 	m := &Monitor{
 		producerClient:  producerClient,
 		producerTopic:   producerTopic,
@@ -36,16 +37,24 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 		instanceUUID:    instanceUUID,
 		partitions:      partitions,
 		sampleFrequency: sampleFrequency,
+		isMirror:        isMirror,
 	}
 	m.p2bStats = make(map[int]*utils.Stats)
 	m.b2cStats = make(map[int]*utils.Stats)
 	m.e2eStats = make(map[int]*utils.Stats)
 	m.producerAckStats = make(map[int]*utils.Stats)
-	for p := range m.partitions {
-		m.p2bStats[p] = utils.NewStats(statsWindow)
-		m.b2cStats[p] = utils.NewStats(statsWindow)
-		m.e2eStats[p] = utils.NewStats(statsWindow)
-		m.producerAckStats[p] = utils.NewStats(statsWindow)
+	if m.isMirror {
+		m.p2bStats[0] = utils.NewStats(statsWindow)
+		m.b2cStats[0] = utils.NewStats(statsWindow)
+		m.e2eStats[0] = utils.NewStats(statsWindow)
+		m.producerAckStats[0] = utils.NewStats(statsWindow)
+	} else {
+		for p := range m.partitions {
+			m.p2bStats[p] = utils.NewStats(statsWindow)
+			m.b2cStats[p] = utils.NewStats(statsWindow)
+			m.e2eStats[p] = utils.NewStats(statsWindow)
+			m.producerAckStats[p] = utils.NewStats(statsWindow)
+		}
 	}
 	return m
 }
@@ -55,6 +64,7 @@ func NewMonitorFromConfig(cfg *config.KMonConfig, partitions int) (*Monitor, err
 	var producerClient *kgo.Client
 	var consumerClient *kgo.Client
 	var err error
+	isMirror := false
 
 	if cfg.ConsumerKafkaConfig == nil {
 		producerClient, err = clients.GetFranzGoClient(cfg.ProducerKafkaConfig, cfg.ProducerMonitoringTopic)
@@ -72,11 +82,14 @@ func NewMonitorFromConfig(cfg *config.KMonConfig, partitions int) (*Monitor, err
 			producerClient.Close()
 			return nil, err
 		}
+		isMirror = true
 	}
 
 	instanceUUID := uuid.NewString()
+	sampleFrequency := time.Duration(cfg.GetSampleFrequencyMs()) * time.Millisecond
+	statsWindow := time.Duration(cfg.GetStatsWindowSeconds()) * time.Second
 
-	return NewMonitorWithClients(producerClient, cfg.ProducerMonitoringTopic, consumerClient, instanceUUID, partitions, time.Duration(cfg.GetSampleFrequencyMs())*time.Millisecond, time.Duration(cfg.GetStatsWindowSeconds())*time.Second), nil
+	return NewMonitorWithClients(producerClient, cfg.ProducerMonitoringTopic, consumerClient, instanceUUID, partitions, sampleFrequency, statsWindow, isMirror), nil
 }
 
 func (m *Monitor) Start(ctx context.Context) {
@@ -125,15 +138,19 @@ func (m *Monitor) publishProbe(ctx context.Context, partition int) {
 		Value:     fmt.Appendf(nil, "%d", sentAt.UnixNano()),
 	}
 
-	partitionLabel := m.partitionLabel(partition)
-
 	m.producerClient.Produce(ctx, record, func(r *kgo.Record, err error) {
+		p := 0
+		if !m.isMirror {
+			p = int(r.Partition)
+		}
+		partitionLabel := m.partitionLabel(p)
+
 		if err != nil {
 			ProduceMessageFailureCount.WithLabelValues(partitionLabel).Inc()
 			return
 		}
 
-		m.producerAckStats[partition].Add(time.Since(sentAt).Milliseconds())
+		m.producerAckStats[p].Add(time.Since(sentAt).Milliseconds())
 		ProduceMessageCount.WithLabelValues(partitionLabel).Inc()
 	})
 }
@@ -175,7 +192,10 @@ func (m *Monitor) handleConsumedRecord(record *kgo.Record, consumeTime time.Time
 	}
 	sentAt := time.Unix(0, timestamp)
 
-	partition := int(record.Partition)
+	partition := 0
+	if !m.isMirror {
+		partition = int(record.Partition)
+	}
 	partitionLabel := m.partitionLabel(partition)
 
 	m.b2cStats[partition].Add(consumeTime.Sub(record.Timestamp).Milliseconds())
@@ -198,7 +218,11 @@ func (m *Monitor) updateQuantilesLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for partition := range m.partitions {
+			loopOver := 1
+			if !m.isMirror {
+				loopOver = m.partitions
+			}
+			for partition := range loopOver {
 				partitionLabel := m.partitionLabel(partition)
 				m.updateQuantiles(m.e2eStats[partition], E2EMessageLatencyQuantile, partitionLabel)
 				m.updateQuantiles(m.p2bStats[partition], P2BMessageLatencyQuantile, partitionLabel)
@@ -210,11 +234,12 @@ func (m *Monitor) updateQuantilesLoop(ctx context.Context) {
 }
 
 func (m *Monitor) updateQuantiles(stats *utils.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
-	res, ok := stats.Percentile([]float64{50, 95, 99})
+	percentiles := []float64{50, 99}
+	res, ok := stats.Percentile(percentiles)
 	if !ok {
 		return
 	}
-	gauge.WithLabelValues(partitionLabel, "p50").Set(float64(res[0]))
-	gauge.WithLabelValues(partitionLabel, "p95").Set(float64(res[1]))
-	gauge.WithLabelValues(partitionLabel, "p99").Set(float64(res[2]))
+	for i, val := range percentiles {
+		gauge.WithLabelValues(partitionLabel, fmt.Sprintf("p%d", int(val))).Set(float64(res[i]))
+	}
 }

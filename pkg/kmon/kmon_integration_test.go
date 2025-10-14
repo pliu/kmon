@@ -47,7 +47,7 @@ func TestKMonIntegration(t *testing.T) {
 
 	time.Sleep(15 * time.Second)
 
-	for partition := range kmon.monitor.partitions {
+	for partition := range numPartitions {
 		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
@@ -85,7 +85,7 @@ func TestKMonIntegration(t *testing.T) {
 	numPartitions, err = kmon.topicManager.getTopicNumPartitions(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 3, numPartitions)
-	for partition := range kmon.monitor.partitions {
+	for partition := range numPartitions {
 		require.Greater(t, kmon.monitor.e2eStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.b2cStats[partition].Len(), 0)
 		require.Greater(t, kmon.monitor.p2bStats[partition].Len(), 0)
