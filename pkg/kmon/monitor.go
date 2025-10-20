@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/phuslu/log"
+	"github.com/pliu/datastructs/pkg/stats"
 	"github.com/pliu/kmon/pkg/clients"
 	"github.com/pliu/kmon/pkg/config"
-	"github.com/pliu/kmon/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -21,10 +21,10 @@ type Monitor struct {
 	consumerClient   clients.KgoClient
 	instanceUUID     string
 	partitions       int
-	p2bStats         map[int]*utils.Stats
-	b2cStats         map[int]*utils.Stats
-	e2eStats         map[int]*utils.Stats
-	producerAckStats map[int]*utils.Stats
+	p2bStats         map[int]*stats.Stats
+	b2cStats         map[int]*stats.Stats
+	e2eStats         map[int]*stats.Stats
+	producerAckStats map[int]*stats.Stats
 	sampleFrequency  time.Duration
 	isMirror         bool
 }
@@ -39,21 +39,21 @@ func NewMonitorWithClients(producerClient clients.KgoClient, producerTopic strin
 		sampleFrequency: sampleFrequency,
 		isMirror:        isMirror,
 	}
-	m.p2bStats = make(map[int]*utils.Stats)
-	m.b2cStats = make(map[int]*utils.Stats)
-	m.e2eStats = make(map[int]*utils.Stats)
-	m.producerAckStats = make(map[int]*utils.Stats)
+	m.p2bStats = make(map[int]*stats.Stats)
+	m.b2cStats = make(map[int]*stats.Stats)
+	m.e2eStats = make(map[int]*stats.Stats)
+	m.producerAckStats = make(map[int]*stats.Stats)
 	if m.isMirror {
-		m.p2bStats[0] = utils.NewStats(statsWindow)
-		m.b2cStats[0] = utils.NewStats(statsWindow)
-		m.e2eStats[0] = utils.NewStats(statsWindow)
-		m.producerAckStats[0] = utils.NewStats(statsWindow)
+		m.p2bStats[0] = stats.NewStats(statsWindow)
+		m.b2cStats[0] = stats.NewStats(statsWindow)
+		m.e2eStats[0] = stats.NewStats(statsWindow)
+		m.producerAckStats[0] = stats.NewStats(statsWindow)
 	} else {
 		for p := range m.partitions {
-			m.p2bStats[p] = utils.NewStats(statsWindow)
-			m.b2cStats[p] = utils.NewStats(statsWindow)
-			m.e2eStats[p] = utils.NewStats(statsWindow)
-			m.producerAckStats[p] = utils.NewStats(statsWindow)
+			m.p2bStats[p] = stats.NewStats(statsWindow)
+			m.b2cStats[p] = stats.NewStats(statsWindow)
+			m.e2eStats[p] = stats.NewStats(statsWindow)
+			m.producerAckStats[p] = stats.NewStats(statsWindow)
 		}
 	}
 	return m
@@ -233,7 +233,7 @@ func (m *Monitor) updateQuantilesLoop(ctx context.Context) {
 	}
 }
 
-func (m *Monitor) updateQuantiles(stats *utils.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
+func (m *Monitor) updateQuantiles(stats *stats.Stats, gauge *prometheus.GaugeVec, partitionLabel string) {
 	percentiles := []float64{50, 99}
 	res, ok := stats.Percentile(percentiles)
 	if !ok {

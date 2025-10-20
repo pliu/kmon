@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/phuslu/log"
+	"github.com/pliu/datastructs/pkg/set"
 	"github.com/pliu/kmon/pkg/clients"
 	"github.com/pliu/kmon/pkg/config"
-	"github.com/pliu/kmon/pkg/utils"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -22,7 +22,7 @@ type TopicManager struct {
 	admClient               *kadm.Client
 	topicName               string
 	reconciliationInterval  time.Duration
-	previousBrokerSet       *utils.Set[int32]
+	previousBrokerSet       *set.Set[int32]
 	changeDetectedCallback  func()
 	doneReconcilingCallback func(int)
 	reconciling             bool
@@ -111,7 +111,7 @@ func (tm *TopicManager) getTopicNumPartitions(ctx context.Context) (int, error) 
 	return 0, nil
 }
 
-func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
+func (tm *TopicManager) createTopic(ctx context.Context, brokerIDs *set.Set[int32]) error {
 	log.Info().Msg("Creating topic")
 
 	createTopicsRequest := kmsg.NewCreateTopicsRequest()
@@ -158,7 +158,7 @@ func (tm *TopicManager) generateTopicConfigs() []kmsg.CreateTopicsRequestTopicCo
 // Partitions are given only 1 replica to avoid the leader automatically moving if the desired primary broker is down
 // (this allows us to test individual brokers)
 // TODO: Use more replicas for cross-cluster testing?
-func (tm *TopicManager) generatePartitionAssignment(brokerIDs *utils.Set[int32]) []kmsg.CreateTopicsRequestTopicReplicaAssignment {
+func (tm *TopicManager) generatePartitionAssignment(brokerIDs *set.Set[int32]) []kmsg.CreateTopicsRequestTopicReplicaAssignment {
 	replicaAssignments := []kmsg.CreateTopicsRequestTopicReplicaAssignment{}
 	for i, brokerID := range brokerIDs.Items() {
 		replicaAssignment := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
@@ -203,7 +203,7 @@ func (tm *TopicManager) waitUntilTopicNoLongerExists(ctx context.Context) error 
 	return nil
 }
 
-func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set[int32]) error {
+func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *set.Set[int32]) error {
 	log.Info().Msg("Reconciling topic")
 
 	if _, err := tm.admClient.DeleteTopic(ctx, tm.topicName); err != nil {
@@ -223,8 +223,8 @@ func (tm *TopicManager) reconcileTopic(ctx context.Context, brokerIDs *utils.Set
 // GetAllBrokers gets all unique broker IDs from both the admin client's list of brokers
 // and from the replicas of all topic partitions to get a stable list as the client's list
 // of brokers is only currently healthy brokers
-func (tm *TopicManager) getAllBrokers(ctx context.Context) (*utils.Set[int32], error) {
-	brokerIDs := utils.NewSet[int32]()
+func (tm *TopicManager) getAllBrokers(ctx context.Context) (*set.Set[int32], error) {
+	brokerIDs := set.NewSet[int32]()
 
 	brokerDetails, err := tm.admClient.ListBrokers(ctx)
 	if err != nil {

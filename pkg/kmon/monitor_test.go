@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
+	"github.com/pliu/datastructs/pkg/stats"
 	"github.com/pliu/kmon/pkg/clients"
-	"github.com/pliu/kmon/pkg/utils"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -40,7 +40,7 @@ func TestHandleConsumedRecord(t *testing.T) {
 	m := NewMonitorWithClients(&MockKgoClient{}, "", &MockKgoClient{}, "test-uuid", partitions, time.Duration(1), time.Duration(5)*time.Minute, false)
 
 	// Create a stats object to record the latency of the handleConsumedRecord function
-	handleConsumedRecordStats := utils.NewStatsWithClock(1*time.Second, clock.NewMock())
+	handleConsumedRecordStats := stats.NewStatsWithClock(1*time.Second, clock.NewMock())
 
 	// Handle multiple records for multiple partitions
 	for p := range partitions {
@@ -102,7 +102,7 @@ func TestHandleConsumedRecordMirrored(t *testing.T) {
 	m := NewMonitorWithClients(&MockKgoClient{}, "", &MockKgoClient{}, "test-uuid", partitions, time.Duration(1), time.Duration(5)*time.Minute, true)
 
 	// Create a stats object to record the latency of the handleConsumedRecord function
-	handleConsumedRecordStats := utils.NewStatsWithClock(1*time.Second, clock.NewMock())
+	handleConsumedRecordStats := stats.NewStatsWithClock(1*time.Second, clock.NewMock())
 
 	// Handle multiple records for multiple partitions
 	for p := range partitions {

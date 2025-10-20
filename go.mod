@@ -6,6 +6,7 @@ require (
 	github.com/benbjohnson/clock v1.3.5
 	github.com/google/uuid v1.6.0
 	github.com/phuslu/log v1.0.120
+	github.com/pliu/datastructs v1.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	github.com/twmb/franz-go v1.19.5
