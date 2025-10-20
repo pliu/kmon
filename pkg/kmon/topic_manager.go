@@ -50,9 +50,7 @@ func (tm *TopicManager) Start(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 1*time.Minute)
-		defer timeoutCancel()
-		if err := tm.maybeReconcileTopic(timeoutCtx); err != nil {
+		if err := tm.maybeReconcileTopic(ctx); err != nil {
 			log.Error().Err(err).Msg("failed to reconcile topic - retrying in 5s")
 			time.Sleep(5 * time.Second)
 			continue
@@ -69,12 +67,15 @@ func (tm *TopicManager) Start(ctx context.Context) {
 func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 	log.Info().Msg("Checking whether to reconcile topic")
 
-	numPartitions, err := tm.getTopicNumPartitions(ctx)
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer timeoutCancel()
+
+	numPartitions, err := tm.getTopicNumPartitions(timeoutCtx)
 	if err != nil {
 		return err
 	}
 
-	brokerIDs, err := tm.getAllBrokers(ctx)
+	brokerIDs, err := tm.getAllBrokers(timeoutCtx)
 	if err != nil {
 		return err
 	}
@@ -82,7 +83,7 @@ func (tm *TopicManager) maybeReconcileTopic(ctx context.Context) error {
 	if tm.reconciling || numPartitions != brokerIDs.Len() || !brokerIDs.Equals(tm.previousBrokerSet) {
 		tm.reconciling = true
 		tm.changeDetectedCallback()
-		if err = tm.reconcileTopic(ctx, brokerIDs); err != nil {
+		if err = tm.reconcileTopic(timeoutCtx, brokerIDs); err != nil {
 			return err
 		}
 		tm.doneReconcilingCallback(brokerIDs.Len())
